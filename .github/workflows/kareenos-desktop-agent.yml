@@ -1,0 +1,114 @@
+name: Kareenos Desktop Agent
+
+# Kareenos (fork): builds and tests the Desktop Agent on a Windows runner and
+# publishes the x64 exe as an artifact. Upstream's workflows are untouched; they
+# trigger on `main` and `v*` tags only, which this fork never pushes.
+on:
+  push:
+    branches: ["kareenos", "kareenos/**"]
+    paths:
+      - "crates/kareenos-desktop-agent/**"
+      - "crates/terminator/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/kareenos-desktop-agent.yml"
+  workflow_dispatch:
+    inputs:
+      spike_minutes:
+        description: "Also run the Notepad spike: keep the agent bound for this many minutes (0 = skip). Needs the KAREENOS_DESKTOP_CONNECT_CODE secret."
+        required: false
+        default: "0"
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build + test (windows x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: kareenos-desktop-agent
+
+      - name: Build
+        run: cargo build -p kareenos-desktop-agent --release
+      - name: Unit tests
+        run: cargo test -p kareenos-desktop-agent --release -- --nocapture
+      - name: Self-check (no network)
+        shell: pwsh
+        run: |
+          .\target\release\kareenos-desktop-agent.exe --version
+          .\target\release\kareenos-desktop-agent.exe --selfcheck
+      - name: No listener (the agent must never open a port)
+        shell: pwsh
+        run: |
+          $before = (netstat -ano | Select-String LISTENING).Count
+          $p = Start-Process -FilePath .\target\release\kareenos-desktop-agent.exe -ArgumentList "--status" -PassThru -Wait -NoNewWindow
+          $after = (netstat -ano | Select-String LISTENING).Count
+          Write-Host "listeners before=$before after=$after (status exit $($p.ExitCode))"
+      - name: Upload exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: kareenos-desktop-agent-win32-x64
+          path: target/release/kareenos-desktop-agent.exe
+          if-no-files-found: error
+
+  spike:
+    name: Notepad spike (manual)
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.spike_minutes != '0' }}
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kareenos-desktop-agent-win32-x64
+          path: agent
+      - name: Sign in with the connection code from the secret and run
+        shell: pwsh
+        env:
+          CONNECT_CODE: ${{ secrets.KAREENOS_DESKTOP_CONNECT_CODE }}
+          MINUTES: ${{ github.event.inputs.spike_minutes }}
+        run: |
+          if (-not $env:CONNECT_CODE) { Write-Error "secret KAREENOS_DESKTOP_CONNECT_CODE is not set"; exit 1 }
+          $exe = Join-Path $PWD "agent\kareenos-desktop-agent.exe"
+          & $exe --selfcheck
+          # Sign in (the code is read from the environment, never from the log).
+          $p = Start-Process -FilePath $exe -ArgumentList @($env:CONNECT_CODE, "--minutes", $env:MINUTES, "--log", "info") -PassThru -NoNewWindow -RedirectStandardError "agent-stderr.log" -RedirectStandardOutput "agent-stdout.log"
+          Start-Sleep -Seconds 15
+          Get-Content agent-stderr.log -Tail 20
+          Write-Host "--- listeners owned by the agent (must be none):"
+          netstat -ano | Select-String LISTENING | Select-String " $($p.Id)$"
+          $deadline = (Get-Date).AddMinutes([int]$env:MINUTES)
+          while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
+            Start-Sleep -Seconds 60
+            Write-Host "--- $(Get-Date -Format HH:mm:ss) agent log tail:"
+            Get-Content agent-stderr.log -Tail 8
+          }
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          Write-Host "--- final log:"
+          Get-Content agent-stderr.log -Tail 60
+      - name: Screenshot of the runner desktop
+        if: always()
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("desktop-after.png")
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-logs
+          path: |
+            agent-stderr.log
+            agent-stdout.log
+            desktop-after.png
+          if-no-files-found: warn

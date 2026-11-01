@@ -8,6 +8,8 @@ members = [
     "packages/terminator-nodejs",
     "crates/terminator-mcp-agent",
     "crates/terminator-workflow-recorder",
+    # Kareenos (fork): the Desktop Agent — see KAREENOS.md
+    "crates/kareenos-desktop-agent",
 ]
 
 

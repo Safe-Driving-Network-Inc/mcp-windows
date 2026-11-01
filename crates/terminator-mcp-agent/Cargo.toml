@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-default = ["telemetry", "sentry"]
+default = ["telemetry", "sentry", "posthog"]
+# Kareenos (fork): PostHog product analytics as a feature so a build can leave it out.
+posthog = []
 telemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions", "dep:opentelemetry-appender-tracing", "dep:tracing-opentelemetry"]
 sentry = ["dep:sentry", "dep:sentry-tracing"]
 

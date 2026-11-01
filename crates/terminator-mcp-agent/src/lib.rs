@@ -10,7 +10,16 @@ pub mod log_pipe;
 pub mod mcp_types;
 pub mod omniparser;
 pub mod output_parser;
+#[cfg(feature = "posthog")]
 pub mod posthog;
+// Kareenos (fork): with the `posthog` feature off, the same entry points do nothing.
+#[cfg(not(feature = "posthog"))]
+pub mod posthog {
+    pub fn capture(_event: &str, _properties: serde_json::Value) {}
+    pub fn track_startup() {}
+    pub fn track_tool_execution(_tool_name: &str, _success: bool, _duration_ms: u64, _error: Option<&str>) {}
+    pub fn track_workflow_execution(_total_steps: usize, _success: bool, _duration_ms: u64) {}
+}
 pub mod prompt;
 pub mod scripting_engine;
 pub mod sentry;
