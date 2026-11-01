@@ -14,7 +14,7 @@
 use crate::adapter::Adapter;
 use crate::envelope::{now_ms, CommandEnvelope};
 use crate::presence::Presence;
-use crate::queue::{Queue, Sink};
+use crate::queue::{ActivityHook, Queue, Sink};
 use crate::record::ConnectionRecord;
 use crate::store::{self, TokenStore};
 use crate::AGENT_VERSION;
@@ -46,6 +46,8 @@ pub enum ConnState {
     Connecting,
     Bound,
     Superseded,
+    /// The platform switch (desktop_channel_enabled) is off; retrying slowly.
+    PlatformOff,
 }
 
 #[derive(Debug)]
@@ -63,11 +65,18 @@ enum Ended {
     Shutdown,
 }
 
+/// Observer for a UI (the tray app): called on every connection state change.
+pub type StateHook = Arc<dyn Fn(ConnState) + Send + Sync>;
+
 pub struct ClientConfig {
     pub ws_url: String,
     pub install_id: String,
     /// Reconnect after another computer took the slot (the tray's "Use this computer").
     pub take_over: bool,
+    /// Connection state changes, for a UI. None in the console binary.
+    pub on_state: Option<StateHook>,
+    /// Command started / finished, for a UI overlay. None in the console binary.
+    pub on_activity: Option<ActivityHook>,
 }
 
 /// What the queue and the pause watcher share with the live socket.
@@ -76,21 +85,32 @@ pub struct Shared {
     outbox: Mutex<Vec<(u64, Value)>>,
     state: Mutex<ConnState>,
     bound: Mutex<bool>,
+    on_state: Option<StateHook>,
 }
 
 impl Shared {
-    fn new() -> Self {
-        Shared { writer: Mutex::new(None), outbox: Mutex::new(vec![]), state: Mutex::new(ConnState::Disconnected), bound: Mutex::new(false) }
+    fn new(on_state: Option<StateHook>) -> Self {
+        Shared { writer: Mutex::new(None), outbox: Mutex::new(vec![]), state: Mutex::new(ConnState::Disconnected), bound: Mutex::new(false), on_state }
     }
     pub fn state(&self) -> ConnState {
         *self.state.lock().unwrap()
     }
     fn set_state(&self, s: ConnState) {
-        let mut st = self.state.lock().unwrap();
-        if *st != s {
-            tracing::info!(from = ?*st, to = ?s, "state");
+        let changed = {
+            let mut st = self.state.lock().unwrap();
+            let changed = *st != s;
+            if changed {
+                tracing::info!(from = ?*st, to = ?s, "state");
+            }
+            *st = s;
+            changed
+        };
+        // The hook runs outside the lock: a UI may read state() from it.
+        if changed {
+            if let Some(h) = &self.on_state {
+                h(s);
+            }
         }
-        *st = s;
     }
     fn set_writer(&self, w: Option<mpsc::UnboundedSender<Message>>) {
         let none = w.is_none();
@@ -170,8 +190,8 @@ pub async fn run(
     presence: Arc<Presence>,
     shutdown: CancellationToken,
 ) -> Exit {
-    let shared = Arc::new(Shared::new());
-    let queue = Queue::spawn(adapter.clone(), sink_for(shared.clone()));
+    let shared = Arc::new(Shared::new(cfg.on_state.clone()));
+    let queue = Queue::spawn_with_hook(adapter.clone(), sink_for(shared.clone()), cfg.on_activity.clone());
 
     // The pause flag (tray / file) → state frames.
     {
@@ -226,7 +246,9 @@ pub async fn run(
                 backoff = BACKOFF_MIN_MS;
             }
             Ok(Ended::RetryAfter(ms, why)) => {
-                shared.set_state(ConnState::Disconnected);
+                if shared.state() != ConnState::PlatformOff {
+                    shared.set_state(ConnState::Disconnected);
+                }
                 tracing::warn!(retry_in_ms = ms, "{}", why);
                 sleep_or_shutdown(ms, &shutdown).await;
             }
@@ -365,6 +387,7 @@ async fn connect_once(
                                         break Ended::SignedOut(reason);
                                     }
                                     if reason == "DISABLED" {
+                                        shared.set_state(ConnState::PlatformOff);
                                         break Ended::RetryAfter(DISABLED_RETRY_MS, "the Desktop Channel is off on the platform (desktop_channel_enabled); waiting".to_string());
                                     }
                                     break Ended::RetryAfter(5_000, format!("bind refused ({reason}) — retrying"));

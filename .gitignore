@@ -49,3 +49,7 @@ mcp.json
 # Windows null device file (created when running >nul in Git Bash)
 nul
 tmpclaude-*
+
+# Kareenos Desktop Agent (apps/desktop-agent): tauri-build output
+apps/desktop-agent/src-tauri/gen/
+apps/desktop-agent/src-tauri/target/

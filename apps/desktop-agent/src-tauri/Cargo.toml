@@ -1,0 +1,44 @@
+[package]
+name = "kareenos-desktop-agent-app"
+version = "0.1.0"
+edition = "2021"
+description = "Kareenos Desktop Agent — the tray application around the kareenos-desktop-agent library (Kareenos Desktop Channel, §5.134)."
+license-file = { workspace = true }
+publish = false
+
+[[bin]]
+name = "kareenos-desktop-agent-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Everything that talks to the platform or to UI Automation lives in the library.
+kareenos-desktop-agent = { path = "../../../crates/kareenos-desktop-agent" }
+terminator = { workspace = true }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# Registered first: a second launch (double-click, deep link) is forwarded to
+# the running instance; the deep-link feature hands the URL to that plugin.
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+tauri-plugin-deep-link = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-updater = { version = "2", optional = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+chrono = { workspace = true }
+hostname = "0.4"
+
+[features]
+default = []
+# The in-app updater (Tauri updater plugin). Off in CI builds; the release build
+# turns it on and injects the updater public key — see KAREENOS.md.
+updater = ["dep:tauri-plugin-updater"]

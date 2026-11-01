@@ -8,6 +8,7 @@ on:
     branches: ["kareenos", "kareenos/**"]
     paths:
       - "crates/kareenos-desktop-agent/**"
+      - "apps/desktop-agent/**"
       - "crates/terminator/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -56,6 +57,47 @@ jobs:
         with:
           name: kareenos-desktop-agent-win32-x64
           path: target/release/kareenos-desktop-agent.exe
+          if-no-files-found: error
+
+  app:
+    name: tray app + MSI (windows x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: kareenos-desktop-agent-app
+      - name: Tauri CLI (prebuilt, via npm)
+        shell: pwsh
+        run: |
+          npm install -g @tauri-apps/cli@^2
+          tauri --version
+      - name: Build the app and the MSI
+        shell: pwsh
+        working-directory: apps/desktop-agent
+        run: tauri build --ci
+      - name: Bundle contents
+        shell: pwsh
+        run: Get-ChildItem -Recurse target\release\bundle | Select-Object FullName, Length | Format-Table -AutoSize
+      - name: No listener (the app must never open a port either)
+        shell: pwsh
+        run: |
+          $before = (netstat -ano | Select-String LISTENING).Count
+          $p = Start-Process -FilePath .\target\release\kareenos-desktop-agent-app.exe -ArgumentList "--autostart" -PassThru
+          Start-Sleep -Seconds 12
+          $mine = netstat -ano | Select-String LISTENING | Select-String " $($p.Id)$"
+          $after = (netstat -ano | Select-String LISTENING).Count
+          Write-Host "listeners before=$before after=$after owned-by-app=$($mine.Count) (exited: $($p.HasExited))"
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          if ($mine.Count -gt 0) { Write-Error "the app opened a listening socket"; exit 1 }
+      - name: Upload MSI + exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: kareenos-desktop-agent-msi-win32-x64
+          path: |
+            target/release/bundle/msi/*.msi
+            target/release/kareenos-desktop-agent-app.exe
           if-no-files-found: error
 
   spike:

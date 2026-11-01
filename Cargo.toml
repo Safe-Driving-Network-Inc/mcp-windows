@@ -10,6 +10,7 @@ members = [
     "crates/terminator-workflow-recorder",
     # Kareenos (fork): the Desktop Agent — see KAREENOS.md
     "crates/kareenos-desktop-agent",
+    "apps/desktop-agent/src-tauri",
 ]
 
 

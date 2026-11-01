@@ -1,0 +1,13 @@
+{
+  "identifier": "default",
+  "description": "The Desktop Agent's own windows: welcome / sign-in, diagnostics, the activity overlay. Links, the clipboard and the updater are driven from Rust, so the pages need only the core IPC and their own window.",
+  "windows": ["main", "diagnostics", "overlay"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-start-dragging"
+  ]
+}

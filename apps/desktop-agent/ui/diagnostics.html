@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Kareenos Desktop Agent — Diagnostics</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="bar">
+    <img src="logo.png" class="logo" alt="">
+    <div>
+      <div class="title">Diagnostics</div>
+      <div class="sub" id="version">…</div>
+    </div>
+    <div class="spacer"></div>
+    <span class="chip muted" id="chip">…</span>
+  </header>
+  <main>
+    <div class="card">
+      <div class="kv" id="kv"></div>
+    </div>
+    <div class="row">
+      <button id="b-logs">Open logs folder</button>
+      <button id="b-copy">Copy diagnostics</button>
+      <button id="b-updates">Check for updates</button>
+      <button id="b-data" class="ghost">Open data folder</button>
+      <div class="spacer"></div>
+      <button id="b-close" class="ghost">Close</button>
+    </div>
+    <div id="msg" class="msg hidden"></div>
+    <h2>Recent activity</h2>
+    <div class="trail" id="trail"></div>
+    <p class="muted">The last 80 lines the agent logged; the full log is in the logs folder. Tokens are never logged.</p>
+  </main>
+  <script src="diagnostics.js"></script>
+</body>
+</html>

@@ -60,8 +60,53 @@ wss URL; local wins).
   OpenTelemetry, PostHog, the local extension bridge on port 17373 live there).
 - Rebase: `git fetch upstream && git rebase upstream/main` on `kareenos`, then rebuild.
 
-## Release (Phase 2, Tauri tray app)
+## The tray app (`apps/desktop-agent`, Phase 2)
 
-`scripts/build-desktop-agent-release.sh` will produce the signed MSI + `latest.json` and publish them
-to the three trees the extension uses (`releases/desktop-agent/latest/` in this repo, the Kareenos
-frontend `public/releases/`, the expressserver public folder) — see the plan in the Kareenos docs.
+A Tauri 2 shell around the library — nothing in it talks to the platform or to UI Automation
+directly:
+
+- `src-tauri/src/agent.rs` — the supervisor. Loads the stored sign-in, creates the UIA desktop
+  once, runs `client::run` on its own thread + tokio runtime and turns the library's hooks
+  (`ClientConfig.on_state`, `on_activity`) into one `Status` the UI renders. Sign in / sign out /
+  "Use this computer" / quit are messages to it.
+- `src-tauri/src/main.rs` — tray icon and menu (status line · Sign in… · Use this computer ·
+  Pause agents · Diagnostics… · Check for updates · Help · Quit), the three windows, the
+  `kareenos-desktop://` deep link (single-instance + deep-link plugins; `register_all()` at start
+  as a belt and braces to the installer's registry entries), start-with-Windows (autostart
+  plugin, enabled on sign-in, disabled on sign-out), the activity overlay (click-through pill,
+  top-right, shown while a command runs, never showing a `fill` value).
+- `src-tauri/src/trail.rs` — the last 80 log lines for Diagnostics / "Copy diagnostics".
+- `ui/` — plain HTML/CSS/JS on the global Tauri API (no Node build step): `index.html`
+  (welcome / sign-in / connected), `diagnostics.html`, `overlay.html`. Brand tokens are a local
+  copy in `app.css`, like the extension's popup.
+- The pause switch is the flag file in `%LOCALAPPDATA%\Kareenos\DesktopAgent` (shared with the
+  console binary); the client's watcher sends the `state` frame.
+
+Build on Windows: `npm i -g @tauri-apps/cli@^2` then `cd apps/desktop-agent && tauri build`
+(the WiX toolset is downloaded by the CLI; output `target/release/bundle/msi/*.msi`). CI does
+exactly this in the `app` job of `.github/workflows/kareenos-desktop-agent.yml` and uploads
+`kareenos-desktop-agent-msi-win32-x64`. The job also proves the app opens no listening port.
+
+Updater: compiled in only with `--features updater` (the plugin needs a public key in the
+config). Release flow: `tauri signer generate -w <gitignored>/kareenos-desktop-agent.key` once;
+build with `tauri build --features updater --config '{"plugins":{"updater":{"pubkey":"<pub>",
+"endpoints":["https://kareenos.com/releases/desktop-agent/latest/latest.json"]}},"bundle":
+{"createUpdaterArtifacts":true}}'` with `TAURI_SIGNING_PRIVATE_KEY` set; the `.sig` goes to the
+release script. The app applies an update only when no command is in flight and the agent has
+been idle 45 s (the 1.3.3 rule).
+
+Not done yet: code signing (Azure Trusted Signing, decision 10 — SmartScreen will warn until
+then), a CSP for the pages (null today; they are local files with no remote content), the
+`AGENT_OUTDATED` bind answer on the server side.
+
+## Release
+
+`scripts/build-desktop-agent-release.sh --msi <file.msi> --version <x.y.z> [--sig <file.sig>]
+[--notes "…"]` takes the MSI built by CI (download the artifact) and publishes ONE unversioned
+file, `KareenosDesktopAgent-Setup-x64.msi`, plus `.sha256`, `latest.json` (Tauri updater manifest)
+and `VERSION` to the three trees the extension uses: `releases/desktop-agent/latest/` in this
+repo, `kareenos_frontend/public/releases/desktop-agent/latest/` (Quasar copies `public/`
+verbatim) and `expressserver/public/kareenos_com/releases/desktop-agent/latest/`. Live at
+`https://kareenos.com/releases/desktop-agent/latest/KareenosDesktopAgent-Setup-x64.msi` after the
+usual frontend publish and expressserver deploy; then author the Downloads row in Super Admin ›
+Downloads.

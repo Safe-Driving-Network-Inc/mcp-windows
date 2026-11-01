@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kareenos Desktop Agent",
+  "version": "0.1.0",
+  "identifier": "com.kareenos.desktopagent",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi"],
+    "publisher": "Safe Driving Network Inc.",
+    "category": "Productivity",
+    "shortDescription": "Lets your Kareenos agents work in the programs on this computer while you are present.",
+    "longDescription": "The Kareenos Desktop Agent connects this Windows computer to one Kareenos project. Agents in that project can see the window in front, click, type and take screenshots while you are at your desk; they pause while you use the mouse or keyboard, and you can pause them from the tray. The agent only dials out to the Kareenos platform and never opens a port.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "createUpdaterArtifacts": false,
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper" },
+      "wix": { "language": "en-US" }
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": { "schemes": ["kareenos-desktop"] }
+    }
+  }
+}

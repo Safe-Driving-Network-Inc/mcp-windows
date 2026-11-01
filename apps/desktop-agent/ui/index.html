@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kareenos Desktop Agent</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="bar">
+    <img src="logo.png" class="logo" alt="">
+    <div>
+      <div class="title">Kareenos Desktop Agent</div>
+      <div class="sub" id="version">…</div>
+    </div>
+    <div class="spacer"></div>
+    <span class="chip muted" id="chip">Starting…</span>
+  </header>
+
+  <main>
+    <!-- First run -->
+    <section id="view-welcome" class="view hidden">
+      <h1>Welcome</h1>
+      <p class="lead">Your Kareenos agents can now work in the programs on this computer while you are at your desk. Three steps:</p>
+      <ol class="steps">
+        <li><b>Installed.</b> The Desktop Agent lives in the tray, next to the clock, and starts with Windows.</li>
+        <li><b>Connect this computer to a project.</b> In Kareenos open <b>Browsers &amp; Desktops</b>, pick the project and click <b>Connect this computer</b>. When the browser asks, allow it to open the Kareenos Desktop Agent.
+          <div class="row"><button id="w-open" class="primary">Open Kareenos</button></div>
+        </li>
+        <li><b>If nothing happened,</b> paste the connection code the page shows:
+          <div class="row"><textarea id="w-code" rows="3" placeholder="Connection code" spellcheck="false"></textarea></div>
+          <div class="row"><button id="w-paste" class="ghost">Paste</button><button id="w-connect" class="primary">Connect</button></div>
+        </li>
+      </ol>
+      <p class="muted">Agents pause while you use the mouse or keyboard. <b>Pause agents</b> in the tray menu stops them entirely. The agent never asks for, and never types, a password.</p>
+    </section>
+
+    <!-- Sign in (not the first run, or a new project) -->
+    <section id="view-signin" class="view hidden">
+      <h1>Sign in</h1>
+      <p class="lead">Connect this computer to a Kareenos project. In Kareenos open <b>Browsers &amp; Desktops</b>, pick the project and click <b>Connect this computer</b>; allow the browser to open this app.</p>
+      <div class="row"><button id="s-open" class="primary">Open Kareenos</button></div>
+      <h2>Or paste the connection code</h2>
+      <div class="row"><textarea id="s-code" rows="3" placeholder="Connection code" spellcheck="false"></textarea></div>
+      <div class="row"><button id="s-paste" class="ghost">Paste</button><button id="s-connect" class="primary">Connect</button></div>
+      <p class="muted" id="s-note"></p>
+    </section>
+
+    <!-- Signed in -->
+    <section id="view-connected" class="view hidden">
+      <h1 id="c-title">Connected</h1>
+      <div class="card">
+        <div class="kv">
+          <div class="k">Project</div><div class="v" id="c-project">—</div>
+          <div class="k">Account</div><div class="v" id="c-account">—</div>
+          <div class="k">Signed in as</div><div class="v" id="c-user">—</div>
+          <div class="k">Status</div><div class="v" id="c-state">—</div>
+          <div class="k">Right now</div><div class="v" id="c-busy">idle</div>
+        </div>
+      </div>
+      <p class="muted" id="c-hint"></p>
+      <div class="row">
+        <button id="c-pause">Pause agents</button>
+        <button id="c-takeover" class="hidden">Use this computer</button>
+        <button id="c-diag" class="ghost">Diagnostics</button>
+        <button id="c-signout" class="danger">Sign out</button>
+        <div class="spacer"></div>
+        <button id="c-close" class="ghost">Close</button>
+      </div>
+    </section>
+
+    <div id="msg" class="msg hidden"></div>
+  </main>
+
+  <footer class="foot"><a href="#" id="lnk-help">Help</a> · <a href="#" id="lnk-diag">Diagnostics</a> · <span id="f-host"></span></footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
