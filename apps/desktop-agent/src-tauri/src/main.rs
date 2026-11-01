@@ -392,8 +392,10 @@ fn main() {
             // kareenos-desktop://connect?p=… — registered by the installer and, for
             // a portable or development run, here as well (per user, no admin).
             #[cfg(any(windows, target_os = "linux"))]
-            if let Err(e) = app.deep_link().register_all() {
-                tracing::warn!(error = %e, "deep link registration failed (the installer registers it too)");
+            {
+                if let Err(e) = app.deep_link().register_all() {
+                    tracing::warn!(error = %e, "deep link registration failed (the installer registers it too)");
+                }
             }
             let link_handle = handle.clone();
             app.deep_link().on_open_url(move |event| {

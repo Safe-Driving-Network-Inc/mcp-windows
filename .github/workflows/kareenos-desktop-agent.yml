@@ -73,6 +73,11 @@ jobs:
         run: |
           npm install -g @tauri-apps/cli@^2
           tauri --version
+      - name: Resolve (the chosen Tauri generation, before any compile)
+        shell: pwsh
+        run: |
+          cargo tree -p kareenos-desktop-agent-app --depth 1 -e normal,build
+          cargo tree -p kareenos-desktop-agent-app -i tauri-runtime-wry -e normal
       - name: Build the app and the MSI
         shell: pwsh
         working-directory: apps/desktop-agent
@@ -98,6 +103,7 @@ jobs:
           path: |
             target/release/bundle/msi/*.msi
             target/release/kareenos-desktop-agent-app.exe
+            Cargo.lock
           if-no-files-found: error
 
   spike:

@@ -340,12 +340,12 @@ impl Agent {
             // 3. The client, until it ends or the UI asks for something else.
             let pol = policy::load();
             self.presence.set_idle_window(pol.human_idle_ms.unwrap_or(3000));
-            let adapter = Arc::new(Adapter::new(desktop.clone().expect("desktop"), pol.clone(), self.presence.clone()));
             let ws_url = pol
                 .ws_url
                 .clone()
                 .or_else(|| record.ws_url.clone().filter(|u| !u.is_empty()))
                 .unwrap_or_else(|| DEFAULT_WS_URL.to_string());
+            let adapter = Arc::new(Adapter::new(desktop.clone().expect("desktop"), pol, self.presence.clone()));
             let me_state = self.clone();
             let me_act = self.clone();
             let cfg = ClientConfig {

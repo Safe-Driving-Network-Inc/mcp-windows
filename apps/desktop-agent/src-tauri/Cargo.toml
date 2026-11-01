@@ -11,21 +11,25 @@ name = "kareenos-desktop-agent-app"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "=2.7.4", features = [] }
 
 [dependencies]
 # Everything that talks to the platform or to UI Automation lives in the library.
 kareenos-desktop-agent = { path = "../../../crates/kareenos-desktop-agent" }
 terminator = { workspace = true }
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# Exact pins (2026-11-01): without them the resolver mixed generations
+# (tauri 2.9.5 + tauri-runtime 2.11.3 + tauri-runtime-wry 2.9.3) and
+# tauri-runtime-wry failed to compile. The tilde requirements between the
+# tauri 2.12.5 crates keep the runtime, wry and utils consistent.
+tauri = { version = "=2.12.5", features = ["tray-icon", "image-png"] }
 # Registered first: a second launch (double-click, deep link) is forwarded to
 # the running instance; the deep-link feature hands the URL to that plugin.
-tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
-tauri-plugin-deep-link = "2"
-tauri-plugin-opener = "2"
-tauri-plugin-clipboard-manager = "2"
-tauri-plugin-autostart = "2"
-tauri-plugin-updater = { version = "2", optional = true }
+tauri-plugin-single-instance = { version = "=2.5.5", features = ["deep-link"] }
+tauri-plugin-deep-link = "=2.6.3"
+tauri-plugin-opener = "=2.7.2"
+tauri-plugin-clipboard-manager = "=2.5.0"
+tauri-plugin-autostart = "=2.7.0"
+tauri-plugin-updater = { version = "=2.14.1", optional = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 serde = { workspace = true }
