@@ -1009,6 +1009,10 @@ impl Adapter {
         let clear = arg_bool(args, "clear", true);
         let t = self.resolve_target(lane, args, true).await?;
         let role = t.role.to_lowercase();
+        // 0.2.2: a password control is never filled (the rule says so; this makes it so).
+        if !(role.contains("checkbox") || role.contains("radio")) {
+            self.refuse_password_target(&t)?;
+        }
         let control = if role.contains("checkbox") {
             "checkbox"
         } else if role.contains("radio") {
@@ -1066,6 +1070,13 @@ impl Adapter {
 
     async fn press(&self, lane: &str, args: &Value) -> AResult {
         let keys = arg_str(args, "keys").ok_or_else(|| ActionError::missing("keys"))?;
+        // 0.2.2: the local policy's deny_keys (Windows shortcuts, Ctrl+Shift+Esc by default).
+        if let Some(rule) = self.policy.denied_key(&keys) {
+            return Err(ActionError::new(
+                "KEY_NOT_ALLOWED",
+                format!("the key sequence {keys} is refused on this computer (local policy deny_keys: {rule}). Open programs with desktop_open; never use Windows shortcuts."),
+            ));
+        }
         let has_target = arg_str(args, "ref").is_some() || arg_str(args, "selector").is_some();
         let (pid, tinfo, element) = if has_target {
             let t = self.resolve_target(lane, args, true).await?;
@@ -1078,6 +1089,13 @@ impl Adapter {
         if let Some(el) = &element {
             let _ = el.focus();
         }
+        // 0.2.2: nothing but navigation keys go into a password field.
+        if !navigation_only(&keys) && focused_is_password() {
+            return Err(ActionError::new(
+                "PASSWORD_FIELD",
+                "the focused field is a password field: the agent never types a password, PIN or passcode. Ask the user to enter it themselves, then continue.",
+            ));
+        }
         self.desktop.press_key(&keys).await?;
         self.presence.note_agent_input();
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -1087,6 +1105,26 @@ impl Adapter {
             "press ok".to_string(),
             json!({ "keys": keys, "target": tinfo, "settle": serde_json::to_value(&settle).unwrap_or(Value::Null) }),
         ))
+    }
+
+    /// The agent never types a secret: a control named like a password field, or one
+    /// Windows marks as a password field (UIA IsPassword, read on the focused
+    /// element after focusing the target), answers PASSWORD_FIELD.
+    fn refuse_password_target(&self, t: &Target) -> Result<(), ActionError> {
+        if looks_like_password(&t.name) {
+            return Err(ActionError::new(
+                "PASSWORD_FIELD",
+                format!("\"{}\" is a password field: the agent never types a password, PIN or passcode. Ask the user to enter it themselves, then continue.", t.name),
+            ));
+        }
+        let _ = t.element.focus();
+        if focused_is_password() {
+            return Err(ActionError::new(
+                "PASSWORD_FIELD",
+                "the field is a password field (Windows marks it as one): the agent never types a password, PIN or passcode. Ask the user to enter it themselves, then continue.",
+            ));
+        }
+        Ok(())
     }
 
     fn lane_close(&self, lane: &str, args: &Value) -> AResult {
@@ -1454,5 +1492,77 @@ mod tests {
         assert_eq!(e.code, "STALE_REF");
         let e: ActionError = AutomationError::PlatformError("boom".into()).into();
         assert_eq!(e.code, "EXECUTION_ERROR");
+    }
+}
+
+// ---- 0.2.2: password fields and key sequences -----------------------------------------
+
+/// A control named like a secret: whole words only ("pin" never matches "shipping").
+pub(crate) fn looks_like_password(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    if lower.contains("password") || lower.contains("passcode") {
+        return true;
+    }
+    lower
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|w| matches!(w, "passwd" | "pwd" | "pin" | "password" | "passcode"))
+}
+
+/// Only keys that move or confirm, never ones that type: safe in a password field.
+pub(crate) fn navigation_only(keys: &str) -> bool {
+    let k: String = keys.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
+    if k.is_empty() {
+        return true;
+    }
+    let mut rest = k.as_str();
+    while !rest.is_empty() {
+        if !rest.starts_with('{') {
+            return false; // a literal character would be typed
+        }
+        let end = match rest.find('}') {
+            Some(i) => i,
+            None => return false,
+        };
+        let tok = &rest[1..end];
+        if !matches!(tok, "tab" | "enter" | "esc" | "escape" | "shift" | "up" | "down" | "left" | "right" | "home" | "end") {
+            return false;
+        }
+        rest = &rest[end + 1..];
+    }
+    true
+}
+
+/// Does Windows mark the focused control as a password field (UIA IsPassword)?
+/// Read straight from UI Automation (Terminator does not surface the property).
+#[cfg(windows)]
+pub(crate) fn focused_is_password() -> bool {
+    match uiautomation::UIAutomation::new_direct() {
+        Ok(ua) => ua.get_focused_element().and_then(|e| e.get_is_password()).unwrap_or(false),
+        Err(_) => false,
+    }
+}
+#[cfg(not(windows))]
+pub(crate) fn focused_is_password() -> bool {
+    false
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    #[test]
+    fn password_names_and_navigation_keys() {
+        assert!(looks_like_password("Password"));
+        assert!(looks_like_password("Confirm password"));
+        assert!(looks_like_password("PIN"));
+        assert!(looks_like_password("user_pwd"));
+        assert!(!looks_like_password("Shipping address"));
+        assert!(!looks_like_password("Customer name"));
+        assert!(navigation_only("{Tab}"));
+        assert!(navigation_only("{Shift}{Tab}"));
+        assert!(navigation_only("{Enter}"));
+        assert!(!navigation_only("hello{Enter}"));
+        assert!(!navigation_only("{Ctrl}v"));
+        assert!(!navigation_only("{Ctrl}a"));
     }
 }

@@ -27,6 +27,7 @@ pub mod queue;
 pub mod record;
 pub mod refbook;
 pub mod store;
+pub mod trust;
 
 pub const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Build-time default; the sign-in record's `ws_url` and `--server` override it.

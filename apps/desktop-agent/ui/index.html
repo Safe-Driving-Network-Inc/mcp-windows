@@ -48,6 +48,24 @@
       <p class="muted" id="s-note"></p>
     </section>
 
+    <!-- Confirm (0.2.2): the record passed the Kareenos signature and host checks; the person still says yes -->
+    <section id="view-confirm" class="view hidden">
+      <p class="kick">Confirm</p>
+      <h1>Connect this computer?</h1>
+      <p class="lead">Kareenos asked this computer to connect. Continue only if you started this yourself, from Kareenos.</p>
+      <div class="card">
+        <div class="kv">
+          <div class="k">Kareenos server</div><div class="v mono" id="p-host">—</div>
+          <div class="k">Account</div><div class="v" id="p-account">—</div>
+          <div class="k" id="p-who-k">Signed in as</div><div class="v" id="p-who">—</div>
+          <div class="k">Computer</div><div class="v" id="p-computer">—</div>
+          <div class="k">Mode</div><div class="v" id="p-mode">—</div>
+        </div>
+      </div>
+      <p class="muted">Signed by Kareenos (key <span class="mono" id="p-key"></span>). This agent accepts only Kareenos servers and connection codes signed by Kareenos.</p>
+      <div class="row"><button id="p-connect" class="primary">Connect</button><button id="p-cancel" class="ghost">Cancel</button></div>
+    </section>
+
     <!-- Signed in -->
     <section id="view-connected" class="view hidden">
       <p class="kick" id="c-kick">This computer</p>

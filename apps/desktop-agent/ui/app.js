@@ -8,10 +8,13 @@
   var listen = T.event.listen
   var mode = ''
   var status = null
+  // 0.2.2: a pasted code is previewed first; a link waits in Rust (pending) until confirmed.
+  var pendingCode = null
+  var preview = null
 
   function $ (id) { return document.getElementById(id) }
   function show (view) {
-    ;['welcome', 'signin', 'connected'].forEach(function (v) { $('view-' + v).classList.toggle('hidden', v !== view) })
+    ;['welcome', 'signin', 'confirm', 'connected'].forEach(function (v) { $('view-' + v).classList.toggle('hidden', v !== view) })
   }
   function msg (text, kind) {
     var el = $('msg')
@@ -48,6 +51,18 @@
       default: return ''
     }
   }
+  function renderPreview (p) {
+    $('p-host').textContent = p.host || '—'
+    $('p-account').textContent = p.account || '—'
+    var isCode = p.kind === 'code'
+    $('p-who-k').textContent = isCode ? 'Connection code' : 'Signed in as'
+    $('p-who').textContent = isCode ? 'a one-time code from the Computers table' : (p.user || '—')
+    var comp = p.computer_name ? p.computer_name + (p.computer_code ? ' (' + p.computer_code + ')' : '') : (p.computer_code || (isCode ? '—' : 'this computer, for project ' + (p.project || '—')))
+    $('p-computer').textContent = comp
+    $('p-mode').textContent = p.mode === 'unattended' ? 'Unattended (works without anyone at the keyboard)' : 'Attended (agents work while you are present)'
+    $('p-key').textContent = p.signed_by || '—'
+    show('confirm')
+  }
   function render () {
     var s = status
     if (!s) return
@@ -56,6 +71,13 @@
     $('chip').className = 'chip ' + c[0]
     $('chip').textContent = c[1]
     $('f-host').textContent = s.app_url.replace(/^https?:\/\//, '')
+    if (mode === 'confirm') {
+      if (preview) { renderPreview(preview); return }
+      invoke('pending_preview').then(function (p) {
+        if (p) { preview = p; renderPreview(p) } else { mode = s.signed_in ? 'connected' : 'signin'; render() }
+      }).catch(function () { mode = 'signin'; render() })
+      return
+    }
     if (s.signed_in) {
       show('connected')
       var name = s.computer_name || s.hostname || 'This computer'
@@ -87,16 +109,39 @@
   function refresh () {
     return invoke('get_status').then(function (s) { status = s; render() })
   }
+  // A pasted code: check it (signature, hosts) and show where it points; the sign-in
+  // happens only when the person clicks Connect on the confirmation view.
   function connectWith (text) {
     var code = String(text || '').trim()
     if (!code) { msg('Paste the connection code first.', 'bad'); return }
-    msg('Connecting…')
-    invoke('sign_in', { input: code }).then(function (s) {
-      status = s
-      mode = 'connected'
-      msg('Signed in. The tray icon turns to Connected in a moment.', 'ok')
-      render()
+    msg('')
+    invoke('preview_record', { input: code }).then(function (p) {
+      pendingCode = code
+      preview = p
+      mode = 'confirm'
+      renderPreview(p)
     }).catch(function (e) { msg(String(e), 'bad') })
+  }
+  function signedIn (s) {
+    status = s
+    pendingCode = null
+    preview = null
+    mode = 'connected'
+    msg('Signed in. The tray icon turns to Connected in a moment.', 'ok')
+    render()
+  }
+  function confirmConnect () {
+    msg('Connecting…')
+    var p = pendingCode ? invoke('sign_in', { input: pendingCode }) : invoke('confirm_pending')
+    p.then(signedIn).catch(function (e) { msg(String(e), 'bad') })
+  }
+  function cancelConnect () {
+    pendingCode = null
+    preview = null
+    invoke('cancel_pending').catch(function () {})
+    mode = (status && status.signed_in) ? 'connected' : 'signin'
+    msg('Not connected.', '')
+    render()
   }
   function pasteInto (id) {
     invoke('read_clipboard').then(function (t) { $(id).value = t || ''; if (!t) msg('The clipboard is empty.', 'bad') }).catch(function (e) { msg(String(e), 'bad') })
@@ -109,6 +154,8 @@
   $('s-paste').addEventListener('click', function () { pasteInto('s-code') })
   $('w-connect').addEventListener('click', function () { connectWith($('w-code').value) })
   $('s-connect').addEventListener('click', function () { connectWith($('s-code').value) })
+  $('p-connect').addEventListener('click', confirmConnect)
+  $('p-cancel').addEventListener('click', cancelConnect)
   $('c-pause').addEventListener('click', function () { invoke('set_paused', { on: !(status && status.paused) }).then(function (s) { status = s; render() }) })
   $('c-takeover').addEventListener('click', function () { invoke('take_over').then(function (s) { status = s; render() }) })
   $('c-signout').addEventListener('click', function () {
@@ -120,7 +167,15 @@
   $('c-close').addEventListener('click', function () { invoke('close_window') })
 
   listen('status', function (ev) { status = ev.payload; render() })
-  listen('mode', function (ev) { mode = ev.payload || mode; msg(''); render() })
+  listen('mode', function (ev) {
+    mode = ev.payload || mode
+    if (mode === 'confirm') { preview = null; pendingCode = null }
+    msg('')
+    invoke('take_notice').then(function (n) { if (n) msg(n, 'bad') }).catch(function () {})
+    render()
+  })
 
-  invoke('take_mode').then(function (m) { mode = m || '' }).catch(function () {}).then(refresh)
+  invoke('take_mode').then(function (m) { mode = m || '' }).catch(function () {}).then(refresh).then(function () {
+    invoke('take_notice').then(function (n) { if (n) msg(n, 'bad') }).catch(function () {})
+  })
 })()

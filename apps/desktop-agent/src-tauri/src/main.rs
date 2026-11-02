@@ -11,7 +11,8 @@ mod agent;
 mod trail;
 
 use agent::{Agent, Status};
-use kareenos_desktop_agent::record::ConnectionRecord;
+use kareenos_desktop_agent::record::{ConnectionRecord, RecordPreview};
+use kareenos_desktop_agent::trust::Trust;
 use kareenos_desktop_agent::{store, URL_SCHEME};
 use std::sync::{Arc, Mutex};
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
@@ -51,9 +52,28 @@ fn tray_icon_for(s: &Status) -> tauri::image::Image<'static> {
     }
 }
 
-/// Which view the main window should open with (read once by the page).
+/// Which view the main window should open with (read once by the page), a
+/// connection record waiting for the person's confirmation (0.2.2: a link or a
+/// pasted code is never acted on before the person sees where it points), and a
+/// one-shot notice for the page.
 struct UiState {
     mode: Mutex<String>,
+    pending: Mutex<Option<(ConnectionRecord, String)>>,
+    notice: Mutex<String>,
+}
+
+fn set_notice(app: &AppHandle, text: &str) {
+    if let Some(ui) = app.try_state::<UiState>() {
+        *ui.notice.lock().unwrap() = text.to_string();
+    }
+}
+
+/// Parse a link or code and check it against what this agent trusts: the Kareenos
+/// signature and the hosts (trust.rs). The one door for every NEW record.
+fn trusted(input: &str) -> Result<(ConnectionRecord, String), String> {
+    let trust = Trust::production(&kareenos_desktop_agent::policy::load());
+    ConnectionRecord::from_any_trusted(input.trim(), &trust, chrono::Utc::now().timestamp())
+        .map_err(|e| format!("This connection code was not accepted: {e}."))
 }
 
 fn set_mode(app: &AppHandle, mode: &str) {
@@ -130,17 +150,20 @@ fn show_diagnostics(app: &AppHandle) {
     }
 }
 
-/// A link or a pasted code became a sign-in.
+/// A link (the browser's protocol hand-off, or a pasted one) — checked, then shown
+/// to the person for confirmation; never a sign-in by itself (0.2.2).
 fn handle_link(app: &AppHandle, link: &str) {
-    match ConnectionRecord::from_any(link.trim()) {
-        Ok(rec) => {
-            let agent = app.state::<Arc<Agent>>().inner().clone();
-            agent.sign_in(rec);
-            let _ = app.autolaunch().enable();
-            show_main(app, "connected");
+    match trusted(link) {
+        Ok((rec, kid)) => {
+            tracing::info!(signed_by = %kid, "a connection record awaits confirmation ({})", rec.label());
+            if let Some(ui) = app.try_state::<UiState>() {
+                *ui.pending.lock().unwrap() = Some((rec, kid));
+            }
+            show_main(app, "confirm");
         }
         Err(e) => {
-            tracing::warn!(error = %e, "ignored a link that is not a connection record");
+            tracing::warn!(error = %e, "refused a connection link");
+            set_notice(app, &e);
             show_main(app, "signin");
         }
     }
@@ -282,12 +305,46 @@ fn get_trail() -> Vec<trail::Entry> {
     trail::snapshot()
 }
 
+/// The pasted code, after the page showed its preview and the person clicked Connect.
 #[tauri::command]
 fn sign_in(app: AppHandle, agent: State<'_, Arc<Agent>>, input: String) -> Result<Status, String> {
-    let rec = ConnectionRecord::from_any(input.trim()).map_err(|e| format!("That is not a Kareenos Desktop Agent connection code or link ({e})."))?;
+    let (rec, kid) = trusted(&input)?;
+    tracing::info!(signed_by = %kid, "signing in with a pasted connection code ({})", rec.label());
     agent.sign_in(rec);
     let _ = app.autolaunch().enable();
     Ok(agent.status())
+}
+
+/// What a pasted code says, before anything happens (0.2.2).
+#[tauri::command]
+fn preview_record(input: String) -> Result<RecordPreview, String> {
+    let (rec, kid) = trusted(&input)?;
+    Ok(rec.preview(&kid))
+}
+
+/// The link waiting for confirmation, if any.
+#[tauri::command]
+fn pending_preview(ui: State<'_, UiState>) -> Option<RecordPreview> {
+    ui.pending.lock().unwrap().as_ref().map(|(r, k)| r.preview(k))
+}
+
+#[tauri::command]
+fn confirm_pending(app: AppHandle, agent: State<'_, Arc<Agent>>, ui: State<'_, UiState>) -> Result<Status, String> {
+    let (rec, kid) = ui.pending.lock().unwrap().take().ok_or_else(|| "Nothing to confirm: open the link or paste the code again.".to_string())?;
+    tracing::info!(signed_by = %kid, "connection confirmed by the person ({})", rec.label());
+    agent.sign_in(rec);
+    let _ = app.autolaunch().enable();
+    Ok(agent.status())
+}
+
+#[tauri::command]
+fn cancel_pending(ui: State<'_, UiState>) {
+    ui.pending.lock().unwrap().take();
+}
+
+#[tauri::command]
+fn take_notice(ui: State<'_, UiState>) -> String {
+    std::mem::take(&mut *ui.notice.lock().unwrap())
 }
 
 #[tauri::command]
@@ -392,12 +449,17 @@ fn main() {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
     let app = builder
-        .manage(UiState { mode: Mutex::new(String::new()) })
+        .manage(UiState { mode: Mutex::new(String::new()), pending: Mutex::new(None), notice: Mutex::new(String::new()) })
         .invoke_handler(tauri::generate_handler![
             get_status,
             take_mode,
             get_trail,
             sign_in,
+            preview_record,
+            pending_preview,
+            confirm_pending,
+            cancel_pending,
+            take_notice,
             sign_out,
             set_paused,
             take_over,
@@ -468,7 +530,9 @@ fn main() {
             // stored sign-in, bind with it once. The library marks it used when the token arrives.
             if !opened && !agent.status().signed_in {
                 if let Some(code) = store::pending_connect_code() {
-                    match ConnectionRecord::from_any(&code) {
+                    // Checked like any record (signature, hosts); an administrator put it
+                    // there, so no confirmation screen.
+                    match trusted(&code).map(|(r, _)| r) {
                         Ok(rec) => {
                             tracing::info!("signing in with the installer's connection code ({})", rec.label());
                             agent.sign_in(rec);

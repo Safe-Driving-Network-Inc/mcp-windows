@@ -9,6 +9,12 @@
 //! in the console; a path outside both is FILE_NOT_ALLOWED); `managed` marks a
 //! computer an IT department runs (the tray hides Sign out and Quit);
 //! `allow_unattended` lets a machine refuse the unattended mode locally.
+//!
+//! Agent 0.2.2: `extra_hosts` adds Kareenos servers a connection record may name
+//! (a self-hosted platform; the apex or a subdomain, see trust.rs); `deny_keys`
+//! are key sequences `press` refuses (KEY_NOT_ALLOWED) — by default the Windows
+//! key shortcuts and Ctrl+Shift+Esc, the two ways past the deny list of
+//! applications. Local wins, as always.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -42,6 +48,13 @@ pub struct LocalPolicy {
     /// false = this machine refuses to run as an unattended computer.
     #[serde(default = "yes")]
     pub allow_unattended: bool,
+    /// Hosts (apex or subdomain) a connection record may name besides the Kareenos ones.
+    #[serde(default)]
+    pub extra_hosts: Vec<String>,
+    /// Key sequences (Terminator syntax) `press` refuses; matched case-insensitively
+    /// as a substring of the requested sequence.
+    #[serde(default = "default_deny_keys")]
+    pub deny_keys: Vec<String>,
 }
 
 fn yes() -> bool {
@@ -53,6 +66,10 @@ pub fn default_deny() -> Vec<String> {
         .iter()
         .map(|s| s.to_string())
         .collect()
+}
+
+pub fn default_deny_keys() -> Vec<String> {
+    ["{Win}", "{LWin}", "{RWin}", "{Ctrl}{Shift}{Esc}"].iter().map(|s| s.to_string()).collect()
 }
 
 impl Default for LocalPolicy {
@@ -67,8 +84,14 @@ impl Default for LocalPolicy {
             file_put_roots: vec![],
             managed: false,
             allow_unattended: true,
+            extra_hosts: vec![],
+            deny_keys: default_deny_keys(),
         }
     }
+}
+
+fn norm_keys(k: &str) -> String {
+    k.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase()
 }
 
 fn norm(name: &str) -> String {
@@ -90,6 +113,15 @@ impl LocalPolicy {
             return false;
         }
         true
+    }
+
+    /// The deny_keys entry a key sequence trips, if any.
+    pub fn denied_key(&self, keys: &str) -> Option<String> {
+        let k = norm_keys(keys);
+        if k.is_empty() {
+            return None;
+        }
+        self.deny_keys.iter().find(|d| !norm_keys(d).is_empty() && k.contains(&norm_keys(d))).cloned()
     }
 }
 
@@ -141,5 +173,16 @@ mod tests {
         assert!(!p.managed && p.allow_unattended);
         let q: LocalPolicy = serde_json::from_str(r#"{"managed":true,"file_roots":["C:\\ProgramData\\Acme\\logs"]}"#).unwrap();
         assert!(q.managed && q.file_roots.len() == 1 && q.allow_open);
+    }
+
+    #[test]
+    fn deny_keys_catch_the_windows_key_and_the_task_manager() {
+        let p = LocalPolicy::default();
+        assert_eq!(p.denied_key("{Win}r").as_deref(), Some("{Win}"));
+        assert_eq!(p.denied_key("{LWIN}").as_deref(), Some("{LWin}"));
+        assert_eq!(p.denied_key("{Ctrl} {Shift} {Esc}").as_deref(), Some("{Ctrl}{Shift}{Esc}"));
+        assert!(p.denied_key("{Ctrl}s").is_none());
+        assert!(p.denied_key("{Alt}{F4}").is_none());
+        assert!(p.denied_key("hello{Enter}").is_none());
     }
 }

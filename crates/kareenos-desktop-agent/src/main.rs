@@ -69,7 +69,7 @@ fn selfcheck() -> bool {
     };
     say("version", true, AGENT_VERSION.to_string());
     say("envelope", envelope::ACTIONS.len() == 16 && envelope::budget_for("click", None) == 14000, format!("{} actions, contract {}", envelope::ACTIONS.len(), envelope::CONTRACT_VERSION));
-    let rec = ConnectionRecord { v: 1, channel: "desktop".into(), token: "t".into(), code: None, computer: None, exp: Some(1), session_id: None, projectid: Some("pr".into()), accountid: Some("a".into()), userid: Some("u".into()), project_name: None, account_name: None, user_name: None, ws_url: None, api_url: None, app_url: None, renewable: None };
+    let rec = ConnectionRecord { v: 1, channel: "desktop".into(), token: "t".into(), code: None, computer: None, exp: Some(1), session_id: None, projectid: Some("pr".into()), accountid: Some("a".into()), userid: Some("u".into()), project_name: None, account_name: None, user_name: None, ws_url: None, api_url: None, app_url: None, renewable: None, iat: None, sig: None };
     let round = ConnectionRecord::from_any(&format!("kareenos-desktop://connect?p={}", rec.to_code())).map(|r| r == rec).unwrap_or(false);
     say("connection record round trip", round, String::new());
     let dir = store::data_dir();
@@ -137,7 +137,9 @@ async fn main() -> ExitCode {
     }
 
     let record = if let Some(input) = cli.connect.as_deref() {
-        match ConnectionRecord::from_any(input) {
+        // 0.2.2: a new record must be signed by Kareenos and name Kareenos hosts.
+        let trust = kareenos_desktop_agent::trust::Trust::production(&policy::load());
+        match ConnectionRecord::from_any_trusted(input, &trust, chrono::Utc::now().timestamp()).map(|(r, _)| r) {
             Ok(r) => {
                 if let Err(e) = store.save(&r) {
                     eprintln!("could not save the sign-in: {e}");

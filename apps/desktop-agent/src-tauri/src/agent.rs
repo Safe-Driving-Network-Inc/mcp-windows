@@ -434,6 +434,26 @@ impl Agent {
                 .clone()
                 .or_else(|| record.ws_url.clone().filter(|u| !u.is_empty()))
                 .unwrap_or_else(|| DEFAULT_WS_URL.to_string());
+            // 0.2.2: the stored sign-in must still point at a Kareenos server (the local
+            // policy's ws_url and extra_hosts count); otherwise do not dial, say why,
+            // and wait for a new sign-in.
+            if let Err(e) = kareenos_desktop_agent::trust::Trust::production(&pol).check_url("server", &ws_url, &["wss"]) {
+                tracing::warn!(error = %e, "the stored sign-in is not dialled");
+                self.update(|s| {
+                    s.state = "error".into();
+                    s.last_error = Some(format!("{e}. Sign out and sign in again from Kareenos."));
+                });
+                tokio::select! {
+                    c = rx.recv() => match c {
+                        Some(Cmd::SignIn(rec)) => self.save(&store, rec),
+                        Some(Cmd::SignOut) => self.clear(&store),
+                        Some(Cmd::Quit) | None => return,
+                        Some(Cmd::TakeOver) => {}
+                    },
+                    _ = tokio::time::sleep(Duration::from_secs(3600)) => {}
+                }
+                continue;
+            }
             let adapter = Arc::new(Adapter::new(desktop.clone().expect("desktop"), pol, self.presence.clone()));
             let me_state = self.clone();
             let me_act = self.clone();

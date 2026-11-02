@@ -1,6 +1,6 @@
 [package]
 name = "kareenos-desktop-agent"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Kareenos Desktop Agent: the Windows half of the Kareenos Desktop Channel (§5.134). Dials out to the Kareenos browser tier and runs the bounded desktop actions through Terminator."
 license-file = { workspace = true }
@@ -39,6 +39,8 @@ hostname = "0.4"
 url = "2"
 # wave 2: file_get / file_put report a sha256
 sha2 = "0.10"
+# 0.2.2: connection records are signed by the platform (Ed25519, verify only)
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
@@ -52,3 +54,5 @@ windows = { workspace = true, features = [
 ] }
 # wave 2: the installer's hand-off (HKLM ConnectCode / Mode)
 winreg = "0.55"
+# 0.2.2: the focused control's IsPassword, read straight from UI Automation
+uiautomation = { workspace = true }

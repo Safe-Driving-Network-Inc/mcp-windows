@@ -101,6 +101,22 @@ Not done yet: code signing (Azure Trusted Signing, decision 10 — SmartScreen w
 then), a CSP for the pages (null today; they are local files with no remote content), the
 `AGENT_OUTDATED` bind answer on the server side.
 
+## Trust (0.2.2)
+
+- **Servers.** A connection record may only name Kareenos hosts (`trust.rs` `ALLOWED_HOST_SUFFIXES`:
+  `kareenos.com`, `sdnvision.services`, apex or subdomain) over `wss`/`https`. A self-hosted platform adds
+  its hosts in the local policy (`extra_hosts`, or a policy-set `ws_url`); local wins.
+- **Signature.** A new record must be signed by the platform (Ed25519 over `ConnectionRecord::canonical`,
+  `desktop_record_signer.js` on the backend). The public keys live in `RECORD_KEYS`; the `kid` is the first
+  8 hex of sha256(raw key). Rotation: add the new key here, release, then swap the platform's private key;
+  remove the old key one release later. `TEST_RECORD_KEY` is trusted by debug builds only.
+- **Confirmation.** A link or a pasted code is previewed (host, account, computer, mode) and the person
+  clicks Connect; the MSI's `CONNECT_CODE` and the stored sign-in skip the screen; the stored sign-in's host
+  is re-checked before every dial.
+- **Secrets at the keyboard.** `fill`/`press` into a control Windows marks `IsPassword` (read straight
+  from UI Automation) or named like a password/PIN answer `PASSWORD_FIELD`; `press` of the local policy's
+  `deny_keys` (`{Win}`, `{LWin}`, `{RWin}`, `{Ctrl}{Shift}{Esc}` by default) answers `KEY_NOT_ALLOWED`.
+
 ## Release
 
 `scripts/build-desktop-agent-release.sh --msi <file.msi> --version <x.y.z> [--sig <file.sig>]
