@@ -21,7 +21,11 @@
   }
   function chipFor (s) {
     switch (s.state) {
-      case 'connected': return s.paused ? ['warn', 'Paused'] : ['ok', 'Connected']
+      case 'connected':
+        if (s.locked) return ['warn', 'Locked']
+        if (s.paused) return ['warn', 'Paused']
+        if (s.busy) return ['work', 'Working']
+        return ['ok', 'Connected']
       case 'connecting': return ['muted', 'Connecting…']
       case 'offline': return ['warn', 'Offline — reconnecting']
       case 'superseded': return ['warn', 'Another computer is connected']
@@ -32,7 +36,10 @@
   }
   function hintFor (s) {
     switch (s.state) {
-      case 'connected': return s.paused ? 'Agents are paused on this computer until you resume them.' : 'Agents may work in your programs now. They pause while you use the mouse or keyboard.'
+      case 'connected':
+        if (s.locked) return 'This computer is locked or at the Windows sign-in screen, so agents wait. Sign in and keep it unlocked; an unattended computer must stay signed in.'
+        if (s.paused) return 'Agents are paused on this computer until you resume them.'
+        return s.managed ? 'This computer is managed by your IT department. Agents of the people allowed on it may work here; they pause while someone uses the mouse or keyboard.' : 'Agents may work in your programs now. They pause while you use the mouse or keyboard.'
       case 'connecting': return 'Reaching the Kareenos platform…'
       case 'offline': return 'The platform cannot be reached. The agent reconnects by itself; check the network if this stays.'
       case 'superseded': return 'Another computer signed in to this project, so this one stepped aside. Click “Use this computer” to take the project back.'
@@ -44,21 +51,31 @@
   function render () {
     var s = status
     if (!s) return
-    $('version').textContent = 'v' + s.version + (s.hostname ? ' · ' + s.hostname : '')
+    $('version').textContent = 'v' + s.version
     var c = chipFor(s)
     $('chip').className = 'chip ' + c[0]
     $('chip').textContent = c[1]
     $('f-host').textContent = s.app_url.replace(/^https?:\/\//, '')
     if (s.signed_in) {
       show('connected')
-      $('c-title').textContent = c[1]
+      var name = s.computer_name || s.hostname || 'This computer'
+      $('c-computer').textContent = name
+      $('c-code').textContent = s.computer_code || ''
+      $('c-code').classList.toggle('hidden', !s.computer_code)
+      $('c-kick').textContent = s.computer_mode === 'unattended' ? 'Unattended computer' : 'This computer'
+      $('c-sub').textContent = s.managed ? 'Managed by your IT department' : (s.computer_mode === 'unattended' ? 'Works without anyone at the keyboard' : 'Agents work here while you are present')
+      var live = s.state === 'connected' && !s.paused && !s.locked
+      $('c-dot').className = 'dot ' + (live ? (s.busy ? 'live' : '') : 'quiet')
+      $('c-state').textContent = c[1].toUpperCase() + (s.last_error && s.state !== 'error' ? ' · ' + s.last_error : '')
+      $('c-actor-line').classList.toggle('hidden', !s.actor)
+      $('c-actor').textContent = s.actor ? s.actor + ' is working here' : ''
       $('c-project').textContent = s.project || '—'
       $('c-account').textContent = s.account || '—'
       $('c-user').textContent = s.user || '—'
-      $('c-state').textContent = c[1] + (s.last_error && s.state !== 'error' ? ' · ' + s.last_error : '')
       $('c-busy').textContent = s.busy || 'idle'
       $('c-hint').textContent = hintFor(s)
-      $('c-pause').textContent = s.paused ? 'Resume agents' : 'Pause agents'
+      $('c-pause-text').textContent = s.paused ? 'Resume agents' : 'Pause agents'
+      $('c-signout').classList.toggle('hidden', !!s.managed)
       $('c-takeover').classList.toggle('hidden', s.state !== 'superseded')
     } else if (mode === 'welcome') {
       show('welcome')

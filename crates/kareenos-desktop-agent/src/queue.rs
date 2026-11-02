@@ -32,6 +32,8 @@ pub struct Activity {
     pub started: bool,
     /// The failure code of a finished command; None on success.
     pub code: Option<String>,
+    /// Who is acting (contract 1.1): "Sara's Invoice Clerk"; None on a 1.0 command.
+    pub actor: Option<String>,
 }
 
 /// Observer for a UI (the tray app's overlay). None in the console binary.
@@ -177,12 +179,13 @@ async fn consume(
         } else {
             ack(&sink, &q.cmd.command_id, "started", started, 0);
             let label = activity_label(&q.cmd);
+            let actor = q.cmd.actor_label();
             if let Some(h) = &hook {
-                h(Activity { command_id: q.cmd.command_id.clone(), action: action.clone(), label: label.clone(), started: true, code: None });
+                h(Activity { command_id: q.cmd.command_id.clone(), action: action.clone(), label: label.clone(), started: true, code: None, actor: actor.clone() });
             }
             let finished = |code: Option<String>| {
                 if let Some(h) = &hook {
-                    h(Activity { command_id: q.cmd.command_id.clone(), action: action.clone(), label: label.clone(), started: false, code });
+                    h(Activity { command_id: q.cmd.command_id.clone(), action: action.clone(), label: label.clone(), started: false, code, actor: actor.clone() });
                 }
             };
             let remaining = q.deadline_at.saturating_sub(started).saturating_sub(TIMEOUT_MARGIN_MS);

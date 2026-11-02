@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Kareenos Desktop Agent — WiX fragment (wave 2, 2026-11-02):
+    * CONNECT_CODE: a one-time connection code handed over by a silent install
+      (msiexec /i … CONNECT_CODE=<code> /qn). It lands in
+      HKLM\Software\Kareenos\DesktopAgent\ConnectCode; the agent reads it once,
+      when no sign-in is stored, binds with it and receives its token.
+    * The "Run unattended (service)" feature (ADDLOCAL=Service): the Kareenos
+      Desktop Service keeps the agent running inside the signed-in Windows
+      session (UI Automation cannot run in session 0), restarts it, and writes
+      Mode=service so the agent knows it is managed. Not installed by default.
+  Referenced from tauri.conf.json (wix.fragmentPaths / componentRefs / featureRefs).
+  The service exe comes from the environment at build time (CI sets
+  KAREENOS_SERVICE_EXE to the built kareenos-desktop-service.exe).
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <Property Id="CONNECT_CODE" Secure="yes" />
+
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="KareenosConnectCode" Guid="7d3f0b2e-3c41-4c45-9a6b-5e0e4f0d1a21" Win64="yes">
+        <Condition>CONNECT_CODE</Condition>
+        <RegistryKey Root="HKLM" Key="Software\Kareenos\DesktopAgent">
+          <RegistryValue Name="ConnectCode" Value="[CONNECT_CODE]" Type="string" KeyPath="yes" />
+        </RegistryKey>
+      </Component>
+
+      <Component Id="KareenosService" Guid="0f6b1c7a-9d2e-4a3f-8c51-2b7e6d9f4a10" Win64="yes">
+        <File Id="KareenosServiceExe" Name="kareenos-desktop-service.exe" Source="$(env.KAREENOS_SERVICE_EXE)" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Kareenos\DesktopAgent" Name="Mode" Value="service" Type="string" />
+        <ServiceInstall Id="KareenosServiceInstall" Name="KareenosDesktopService" DisplayName="Kareenos Desktop Service"
+                        Description="Keeps the Kareenos Desktop Agent running in the signed-in Windows session so Kareenos agents can work on this computer unattended."
+                        Start="auto" Type="ownProcess" ErrorControl="normal" Account="LocalSystem" Vital="yes" />
+        <ServiceControl Id="KareenosServiceControl" Name="KareenosDesktopService" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="Service" Title="Run unattended (service)" Level="2" AllowAdvertise="no"
+             Description="Installs the Kareenos Desktop Service, which keeps the agent running in the signed-in session and restarts it. For computers an IT department runs unattended; keep the computer signed in and unlocked.">
+      <ComponentRef Id="KareenosService" />
+    </Feature>
+  </Fragment>
+</Wix>

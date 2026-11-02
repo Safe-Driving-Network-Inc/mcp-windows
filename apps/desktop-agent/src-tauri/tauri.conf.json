@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kareenos Desktop Agent",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "identifier": "com.kareenos.desktopagent",
   "build": {
     "frontendDist": "../ui"
@@ -15,11 +15,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi"],
+    "targets": [
+      "msi"
+    ],
     "publisher": "Safe Driving Network Inc.",
     "category": "Productivity",
-    "shortDescription": "Lets your Kareenos agents work in the programs on this computer while you are present.",
-    "longDescription": "The Kareenos Desktop Agent connects this Windows computer to one Kareenos project. Agents in that project can see the window in front, click, type and take screenshots while you are at your desk; they pause while you use the mouse or keyboard, and you can pause them from the tray. The agent only dials out to the Kareenos platform and never opens a port.",
+    "shortDescription": "Lets your Kareenos agents work in the programs on this computer.",
+    "longDescription": "The Kareenos Desktop Agent connects this Windows computer to your Kareenos account. Agents of the people allowed on it can see the window in front, click, type, read files you allow and take screenshots; while someone sits at it they pause whenever that person uses the mouse or keyboard, and the person can pause them from the tray. With the optional service it runs unattended. The agent only dials out to the Kareenos platform and never opens a port.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -29,13 +31,32 @@
     ],
     "createUpdaterArtifacts": false,
     "windows": {
-      "webviewInstallMode": { "type": "downloadBootstrapper" },
-      "wix": { "language": "en-US" }
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "wix": {
+        "language": "en-US",
+        "bannerPath": "wix/banner.bmp",
+        "dialogImagePath": "wix/dialog.bmp",
+        "fragmentPaths": [
+          "wix/kareenos.wxs"
+        ],
+        "componentRefs": [
+          "KareenosConnectCode"
+        ],
+        "featureRefs": [
+          "Service"
+        ]
+      }
     }
   },
   "plugins": {
     "deep-link": {
-      "desktop": { "schemes": ["kareenos-desktop"] }
+      "desktop": {
+        "schemes": [
+          "kareenos-desktop"
+        ]
+      }
     }
   }
 }

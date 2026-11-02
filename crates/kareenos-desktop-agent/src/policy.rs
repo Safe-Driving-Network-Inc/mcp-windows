@@ -3,6 +3,12 @@
 //! (the CLI client's rule): an application on the deny list is refused with
 //! APP_NOT_ALLOWED, and the deny list ships with the shells and system consoles
 //! because shell work belongs to the Kareenos CLI Client, never to this agent.
+//!
+//! Wave 2 (contract 1.1): `file_roots` / `file_put_roots` are the folders the
+//! file actions may read / write (joined with the roots the computer's owner set
+//! in the console; a path outside both is FILE_NOT_ALLOWED); `managed` marks a
+//! computer an IT department runs (the tray hides Sign out and Quit);
+//! `allow_unattended` lets a machine refuse the unattended mode locally.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -24,6 +30,18 @@ pub struct LocalPolicy {
     /// Overrides the wss URL (white-label / self-hosted platforms).
     #[serde(default)]
     pub ws_url: Option<String>,
+    /// Folders the file actions may read from (absolute paths; `%VAR%` expanded).
+    #[serde(default)]
+    pub file_roots: Vec<String>,
+    /// Folders `file_put` may write into (absolute paths; `%VAR%` expanded).
+    #[serde(default)]
+    pub file_put_roots: Vec<String>,
+    /// An IT-managed computer: the tray hides Sign out and Quit.
+    #[serde(default)]
+    pub managed: bool,
+    /// false = this machine refuses to run as an unattended computer.
+    #[serde(default = "yes")]
+    pub allow_unattended: bool,
 }
 
 fn yes() -> bool {
@@ -39,7 +57,17 @@ pub fn default_deny() -> Vec<String> {
 
 impl Default for LocalPolicy {
     fn default() -> Self {
-        LocalPolicy { deny_processes: default_deny(), allow_processes: vec![], allow_open: true, human_idle_ms: None, ws_url: None }
+        LocalPolicy {
+            deny_processes: default_deny(),
+            allow_processes: vec![],
+            allow_open: true,
+            human_idle_ms: None,
+            ws_url: None,
+            file_roots: vec![],
+            file_put_roots: vec![],
+            managed: false,
+            allow_unattended: true,
+        }
     }
 }
 
@@ -104,5 +132,14 @@ mod tests {
         let only = LocalPolicy { allow_processes: vec!["notepad".into()], ..LocalPolicy::default() };
         assert!(only.app_allowed("Notepad.exe"));
         assert!(!only.app_allowed("excel"));
+    }
+
+    #[test]
+    fn wave2_fields_default_safely() {
+        let p: LocalPolicy = serde_json::from_str("{}").unwrap();
+        assert!(p.file_roots.is_empty() && p.file_put_roots.is_empty());
+        assert!(!p.managed && p.allow_unattended);
+        let q: LocalPolicy = serde_json::from_str(r#"{"managed":true,"file_roots":["C:\\ProgramData\\Acme\\logs"]}"#).unwrap();
+        assert!(q.managed && q.file_roots.len() == 1 && q.allow_open);
     }
 }

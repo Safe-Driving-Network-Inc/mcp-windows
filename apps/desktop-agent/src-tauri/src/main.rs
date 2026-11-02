@@ -33,6 +33,22 @@ struct TrayItems {
     sign_in: MenuItem<Wry>,
     take_over: MenuItem<Wry>,
     pause: CheckMenuItem<Wry>,
+    quit: MenuItem<Wry>,
+}
+
+/// Brand v5 (decision 21): the mark with a corner state dot. One PNG per state,
+/// rendered from the tokens by scripts/brand-assets.cjs.
+fn tray_icon_for(s: &Status) -> tauri::image::Image<'static> {
+    if s.busy.is_some() {
+        return tauri::include_image!("icons/tray-working.png");
+    }
+    match s.state.as_str() {
+        "connected" if s.locked || s.paused => tauri::include_image!("icons/tray-paused.png"),
+        "connected" => tauri::include_image!("icons/tray-idle.png"),
+        "error" | "signed_out" => tauri::include_image!("icons/tray-error.png"),
+        "superseded" => tauri::include_image!("icons/tray-paused.png"),
+        _ => tauri::include_image!("icons/tray-offline.png"),
+    }
 }
 
 /// Which view the main window should open with (read once by the page).
@@ -50,12 +66,15 @@ fn set_mode(app: &AppHandle, mode: &str) {
 fn apply_status(app: &AppHandle, s: &Status) {
     if let Some(items) = app.try_state::<TrayItems>() {
         let _ = items.status.set_text(s.tray_line());
-        let _ = items.sign_in.set_text(if s.signed_in { "Sign in to another project…" } else { "Sign in…" });
+        let _ = items.sign_in.set_text(if s.signed_in { "Sign in again…" } else { "Sign in…" });
+        let _ = items.sign_in.set_enabled(!s.managed);
         let _ = items.take_over.set_enabled(s.state == "superseded");
         let _ = items.pause.set_checked(s.paused);
+        let _ = items.quit.set_enabled(!s.managed);
     }
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let _ = tray.set_tooltip(Some(format!("Kareenos Desktop Agent — {}", s.tray_line())));
+        let _ = tray.set_icon(Some(tray_icon_for(s)));
     }
     let _ = app.emit("status", s);
     if let Some(overlay) = app.get_webview_window("overlay") {
@@ -184,6 +203,9 @@ fn on_menu(app: &AppHandle, id: &str) {
             let _ = app.opener().open_url(DOCS_URL, None::<&str>);
         }
         "quit" => {
+            if agent.status().managed {
+                return;   // an IT-managed computer: the service keeps the agent alive
+            }
             agent.quit();
             app.exit(0);
         }
@@ -200,6 +222,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let updates = MenuItem::with_id(app, "updates", "Check for updates", true, None::<&str>)?;
     let help = MenuItem::with_id(app, "help", "Help", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let quit_ref = quit.clone();
     let menu = Menu::with_items(
         app,
         &[
@@ -217,13 +240,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         ],
     )?;
     TrayIconBuilder::with_id(TRAY_ID)
-        .icon(tauri::include_image!("icons/icon.png"))
+        .icon(tauri::include_image!("icons/tray-offline.png"))
         .tooltip("Kareenos Desktop Agent")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
         .build(app)?;
-    app.manage(TrayItems { status, sign_in, take_over, pause });
+    app.manage(TrayItems { status, sign_in, take_over, pause, quit: quit_ref });
     Ok(())
 }
 
@@ -324,9 +347,27 @@ fn close_window(window: tauri::WebviewWindow) {
     let _ = window.close();
 }
 
+/// Brand review (`--brand-shots`, CI): the four surfaces at fixed places, the
+/// overlay with a sample line; the runner screenshots the desktop after 10 s.
+fn brand_shots(app: &AppHandle) {
+    let agent = app.state::<Arc<Agent>>().inner().clone();
+    show_main(app, "welcome");
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_position(tauri::PhysicalPosition::new(40, 40));
+    }
+    show_diagnostics(app);
+    if let Some(w) = app.get_webview_window("diagnostics") {
+        let _ = w.set_position(tauri::PhysicalPosition::new(640, 40));
+    }
+    agent.demo_busy("Sara's Invoice Clerk · Typing into Name");
+}
+
 fn main() {
     let _log_guard = init_logging();
     let autostarted = std::env::args().any(|a| a == "--autostart");
+    // Wave 2: started by the Kareenos Desktop Service inside the signed-in session.
+    let service_child = std::env::args().any(|a| a == "--service-child");
+    let shots = std::env::args().any(|a| a == "--brand-shots");
     let positional = std::env::args().nth(1).filter(|a| !a.starts_with("--"));
 
     #[allow(unused_mut)]
@@ -416,10 +457,37 @@ fn main() {
                     opened = true;
                 }
             }
-            if !opened && !autostarted && !agent.status().signed_in {
+            if service_child {
+                agent.set_managed(true);
+            }
+            // Wave 2: a silent install left a one-time connection code (HKLM); with no
+            // stored sign-in, bind with it once. The library marks it used when the token arrives.
+            if !opened && !agent.status().signed_in {
+                if let Some(code) = store::pending_connect_code() {
+                    match ConnectionRecord::from_any(&code) {
+                        Ok(rec) => {
+                            tracing::info!("signing in with the installer's connection code ({})", rec.label());
+                            agent.sign_in(rec);
+                            opened = true;
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "the installer's connection code is not a connection record");
+                            store::mark_connect_code_used(&code);
+                        }
+                    }
+                }
+            }
+            if !opened && !autostarted && !service_child && !agent.status().signed_in {
                 show_main(&handle, "welcome");
             }
-            tracing::info!(version = kareenos_desktop_agent::AGENT_VERSION, autostarted, "Kareenos Desktop Agent app started");
+            if shots {
+                let h = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                    brand_shots(&h);
+                });
+            }
+            tracing::info!(version = kareenos_desktop_agent::AGENT_VERSION, autostarted, service_child, "Kareenos Desktop Agent app started");
             Ok(())
         })
         .build(tauri::generate_context!())

@@ -1,0 +1,53 @@
+/* Kareenos Desktop Agent — Brand v5 tokens (the ONLY place a colour, radius,
+   shadow or font name lives in this app). Source of truth:
+   docs/brandv5/kareenos design and style v5.md and the platform's theme.scss;
+   the extension's popup mirrors the same block. Light ground, white surfaces,
+   one dark panel per window, solid indigo accents, gradients on fills only. */
+:root {
+  /* ground + surfaces */
+  --bg: #F7F8FB;
+  --surface: #FFFFFF;
+  --surface-2: #F8FAFC;
+  --panel-dark: #0B1220;
+  --panel-dark-raised: #151D31;
+  /* ink ramp */
+  --ink: #0F172A;
+  --ink-2: #334155;
+  --ink-3: #475569;
+  --muted: #64748B;
+  --faint: #94A3B8;
+  --ink-on-dark: #E8EBF3;
+  --ink-on-dark-soft: #99A3BA;
+  /* accent ramp */
+  --indigo: #4F46E5;
+  --indigo-deep: #4338CA;
+  --indigo-on-dark: #818CF8;
+  --violet: #7C3AED;
+  --cyan: #06B6D4;
+  --cyan-bright: #22D3EE;
+  /* borders */
+  --bd: rgba(15, 23, 42, 0.07);
+  --bd-strong: rgba(15, 23, 42, 0.12);
+  --bd-dark: rgba(148, 163, 184, 0.16);
+  /* semantic */
+  --ok-bg: #ECFDF5; --ok-ink: #047857;
+  --warn-bg: #FFF7ED; --warn-ink: #C2410C;
+  --bad-bg: #FEF2F2; --bad-ink: #DC2626;
+  --info-bg: #EEF2FF; --info-ink: #4338CA;
+  --idle-bg: #F1F5F9; --idle-ink: #64748B;
+  /* gradients: fills only, never text */
+  --grad-btn: linear-gradient(100deg, #6D28D9, #4F46E5 42%, #0E8CAA);
+  --grad-panel: linear-gradient(120deg, #5B21B6, #4338CA 45%, #0E7490);
+  --grad-mark: linear-gradient(135deg, #7C3AED, #4F46E5 45%, #06B6D4);
+  --grad-tint: linear-gradient(135deg, rgba(124,58,237,.09), rgba(79,70,229,.05) 45%, rgba(6,182,212,.08));
+  /* shadows */
+  --shadow-card: 0 8px 30px rgba(15, 23, 42, 0.05);
+  --shadow-btn: 0 6px 20px rgba(79, 70, 229, 0.28);
+  --shadow-panel: 0 20px 50px rgba(15, 23, 42, 0.20);
+  /* radii */
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-xl: 22px; --r-pill: 999px;
+  /* type */
+  --font-display: "Space Grotesk", "Manrope", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Manrope", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}

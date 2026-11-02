@@ -8,6 +8,8 @@ Everything upstream stays as it is, so rebases stay cheap. What we add:
 |---|---|
 | `crates/kareenos-desktop-agent/` | **The Kareenos Desktop Agent**: the Windows half of the Kareenos Desktop Channel (platform architecture §5.134). A console binary today; the tray app (Tauri) wraps the same library. |
 | `.github/workflows/kareenos-desktop-agent.yml` | Builds + tests the agent on `windows-latest`, uploads the x64 exe; a manual Notepad spike job. |
+| `crates/kareenos-desktop-service/` | **The Kareenos Desktop Service** (wave 2): a LocalSystem service that keeps the tray app running inside the signed-in Windows session (UIA cannot run in session 0) for unattended computers; installed by the MSI feature `Service` (`ADDLOCAL=Service`). |
+| `apps/desktop-agent/src-tauri/wix/` | The WiX fragment (the `CONNECT_CODE` property of a silent install, the service feature) and the Brand v5 installer images; `scripts/brand-assets.cjs` renders the images and the tray state icons from the brand tokens (run on the Kareenos Mac, outputs committed). |
 | `crates/terminator-mcp-agent` | One change: PostHog analytics sit behind the `posthog` cargo feature (on by default, so upstream behaviour is unchanged). The Desktop Agent does not link that crate at all. |
 
 ## What the Desktop Agent is

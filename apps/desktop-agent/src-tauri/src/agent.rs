@@ -7,6 +7,7 @@
 
 use kareenos_desktop_agent::adapter::Adapter;
 use kareenos_desktop_agent::client::{self, ClientConfig, ConnState, Exit};
+use kareenos_desktop_agent::envelope::CONTRACT_VERSION;
 use kareenos_desktop_agent::presence::Presence;
 use kareenos_desktop_agent::queue::Activity;
 use kareenos_desktop_agent::record::ConnectionRecord;
@@ -42,6 +43,17 @@ pub struct Status {
     pub token_expires: Option<String>,
     pub renewable: Option<bool>,
     pub paused: bool,
+    /// Wave 2: the workstation is locked / at the sign-in screen (commands answer COMPUTER_LOCKED).
+    pub locked: bool,
+    /// Wave 2: an IT-managed computer (the service feature, or policy.managed): no Sign out, no Quit from the tray.
+    pub managed: bool,
+    /// Wave 2: the computer this sign-in belongs to (from the record or the tier's bind_ack).
+    pub computer_name: String,
+    pub computer_code: String,
+    pub computer_mode: String,
+    /// Wave 2: who is acting right now ("Sara's Invoice Clerk"), while a command runs.
+    pub actor: Option<String>,
+    pub contract: String,
     /// The overlay line while a command runs.
     pub busy: Option<String>,
     pub last_error: Option<String>,
@@ -71,6 +83,13 @@ impl Status {
             token_expires: None,
             renewable: None,
             paused: false,
+            locked: false,
+            managed: false,
+            computer_name: String::new(),
+            computer_code: String::new(),
+            computer_mode: String::new(),
+            actor: None,
+            contract: CONTRACT_VERSION.to_string(),
             busy: None,
             last_error: None,
             last_result_code: None,
@@ -95,6 +114,10 @@ impl Status {
         self.token_expires = None;
         self.renewable = None;
         self.busy = None;
+        self.actor = None;
+        self.computer_name.clear();
+        self.computer_code.clear();
+        self.computer_mode.clear();
     }
 
     fn apply_record(&mut self, r: &ConnectionRecord) {
@@ -105,6 +128,11 @@ impl Status {
         self.user = r.user_name.clone().or_else(|| r.userid.clone()).unwrap_or_default();
         self.token_expires = r.exp.and_then(|e| chrono::DateTime::from_timestamp(e, 0)).map(|d| d.to_rfc3339());
         self.renewable = r.renewable;
+        if let Some(c) = &r.computer {
+            self.computer_name = c.name.clone().unwrap_or_default();
+            self.computer_code = c.code.clone().unwrap_or_default();
+            self.computer_mode = c.mode.clone().unwrap_or_default();
+        }
         self.app_url = r
             .api_url
             .as_deref()
@@ -113,16 +141,31 @@ impl Status {
             .unwrap_or_else(|| DEFAULT_APP_URL.to_string());
     }
 
+    /// "LAB-01", else the computer's name, else the project: what the tray names.
+    pub fn place(&self) -> String {
+        if !self.computer_code.is_empty() {
+            return self.computer_code.clone();
+        }
+        if !self.computer_name.is_empty() {
+            return self.computer_name.clone();
+        }
+        self.project.clone()
+    }
+
     /// The one line the tray shows.
     pub fn tray_line(&self) -> String {
         match self.state.as_str() {
             "signed_out" => "Signed out".to_string(),
             "connecting" => "Connecting…".to_string(),
             "connected" => {
-                if self.paused {
-                    format!("Paused · {}", self.project)
+                if self.locked {
+                    format!("Locked — waiting · {}", self.place())
+                } else if self.paused {
+                    format!("Paused · {}", self.place())
+                } else if let Some(a) = &self.actor {
+                    format!("Working · {a}")
                 } else {
-                    format!("Connected · {}", self.project)
+                    format!("Connected · {}", self.place())
                 }
             }
             "offline" => "Offline — reconnecting".to_string(),
@@ -167,7 +210,16 @@ impl Agent {
                 None
             }
         };
+        status.managed = pol.managed || store::install_mode().as_deref() == Some("service");
         let agent = Arc::new(Agent { store, presence, status: Mutex::new(status), tx, on_change: Box::new(on_change), take_over: AtomicBool::new(false) });
+        {
+            // Lock changes reach the UI within a few seconds (the watcher in the client sets presence).
+            let me = agent.clone();
+            std::thread::Builder::new().name("kareenos-lock-watch".into()).spawn(move || loop {
+                std::thread::sleep(Duration::from_secs(3));
+                me.refresh_lock();
+            }).expect("lock watch thread");
+        }
         // Its own thread and runtime: the channel client, the queue and the UIA
         // calls never share a thread with the app's event loop or Tauri's runtime.
         let me = agent.clone();
@@ -190,10 +242,19 @@ impl Agent {
         let s = {
             let mut g = self.status.lock().unwrap();
             f(&mut g);
+            g.locked = self.presence.is_locked();
             g.updated_at = now_ms();
             g.clone()
         };
         (self.on_change)(s);
+    }
+
+    /// The lock state is read by the library's watcher; the UI learns it here every few seconds.
+    pub fn refresh_lock(&self) {
+        let changed = { self.status.lock().unwrap().locked != self.presence.is_locked() };
+        if changed {
+            self.update(|_| {});
+        }
     }
 
     pub fn sign_in(&self, rec: ConnectionRecord) {
@@ -245,13 +306,37 @@ impl Agent {
     fn on_activity(&self, a: Activity) {
         self.update(|s| {
             if a.started {
-                s.busy = Some(a.label.clone());
+                s.actor = a.actor.clone();
+                s.busy = Some(match &a.actor {
+                    Some(who) => format!("{who} · {}", a.label),
+                    None => a.label.clone(),
+                });
             } else {
                 s.busy = None;
+                s.actor = None;
                 s.commands_done += 1;
                 s.last_command_at = Some(now_ms());
                 s.last_result_code = a.code.clone();
             }
+        });
+    }
+
+    /// The stored record changed (a token after a code bind, the computer from bind_ack).
+    fn on_record(&self, rec: ConnectionRecord) {
+        self.update(|s| s.apply_record(&rec));
+    }
+
+    /// An IT-managed computer: the tray offers no Sign out and no Quit.
+    pub fn set_managed(&self, on: bool) {
+        self.update(|s| s.managed = on);
+    }
+
+    /// Brand review (`--brand-shots`): a sample activity line for the overlay.
+    pub fn demo_busy(&self, line: &str) {
+        let line = line.to_string();
+        self.update(|s| {
+            s.actor = Some("Sara's Invoice Clerk".to_string());
+            s.busy = Some(line);
         });
     }
 
@@ -348,12 +433,14 @@ impl Agent {
             let adapter = Arc::new(Adapter::new(desktop.clone().expect("desktop"), pol, self.presence.clone()));
             let me_state = self.clone();
             let me_act = self.clone();
+            let me_rec = self.clone();
             let cfg = ClientConfig {
                 ws_url: ws_url.clone(),
                 install_id: store::install_id(),
                 take_over: self.take_over.swap(false, Ordering::SeqCst),
                 on_state: Some(Arc::new(move |cs: ConnState| me_state.on_conn_state(cs))),
                 on_activity: Some(Arc::new(move |a: Activity| me_act.on_activity(a))),
+                on_record: Some(Arc::new(move |r: ConnectionRecord| me_rec.on_record(r))),
             };
             self.update(|s| {
                 s.server = ws_url;

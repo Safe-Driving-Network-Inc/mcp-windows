@@ -16,7 +16,11 @@
   }
   function fmt (ms) { try { return new Date(ms).toLocaleTimeString() } catch (e) { return String(ms) } }
   var ROWS = [
-    ['State', function (s) { return s.state + (s.paused ? ' (paused)' : '') }],
+    ['State', function (s) { return s.state + (s.paused ? ' (paused)' : '') + (s.locked ? ' (locked)' : '') }],
+    ['Computer', function (s) { return (s.computer_name || '—') + (s.computer_code ? ' (' + s.computer_code + ')' : '') + (s.computer_mode ? ' · ' + s.computer_mode : '') }],
+    ['Managed', function (s) { return s.managed ? 'yes (service / policy)' : 'no' }],
+    ['Working now', function (s) { return s.actor || '—' }],
+    ['Contract', function (s) { return s.contract || '—' }],
     ['Project', function (s) { return s.project || '—' }],
     ['Account', function (s) { return s.account || '—' }],
     ['User', function (s) { return s.user || '—' }],
@@ -28,7 +32,7 @@
     ['Right now', function (s) { return s.busy || 'idle' }],
     ['Last error', function (s) { return s.last_error || '—' }],
     ['Version', function (s) { return s.version }],
-    ['Computer', function (s) { return s.hostname }],
+    ['Host name', function (s) { return s.hostname }],
     ['Install id', function (s) { return s.install_id }],
     ['Data folder', function (s) { return s.data_dir }],
     ['Logs folder', function (s) { return s.logs_dir }],
@@ -37,8 +41,8 @@
   function render () {
     if (!status) return
     $('version').textContent = 'v' + status.version + ' · ' + status.hostname
-    $('chip').textContent = status.state
-    $('chip').className = 'chip ' + (status.state === 'connected' ? 'ok' : (status.state === 'error' ? 'bad' : 'warn'))
+    $('chip').textContent = status.locked ? 'Locked' : (status.busy ? 'Working' : status.state)
+    $('chip').className = 'chip ' + (status.locked ? 'warn' : (status.busy ? 'work' : (status.state === 'connected' ? 'ok' : (status.state === 'error' ? 'bad' : 'warn'))))
     var kv = $('kv')
     kv.textContent = ''
     ROWS.forEach(function (r) {

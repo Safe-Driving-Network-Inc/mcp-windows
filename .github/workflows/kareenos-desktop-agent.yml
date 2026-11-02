@@ -8,6 +8,7 @@ on:
     branches: ["kareenos", "kareenos/**"]
     paths:
       - "crates/kareenos-desktop-agent/**"
+      - "crates/kareenos-desktop-service/**"
       - "apps/desktop-agent/**"
       - "crates/terminator/**"
       - "Cargo.toml"
@@ -37,9 +38,12 @@ jobs:
           key: kareenos-desktop-agent
 
       - name: Build
-        run: cargo build -p kareenos-desktop-agent --release
+        run: cargo build -p kareenos-desktop-agent -p kareenos-desktop-service --release
       - name: Unit tests
         run: cargo test -p kareenos-desktop-agent --release -- --nocapture
+      - name: Service binary answers --version
+        shell: pwsh
+        run: .\target\release\kareenos-desktop-service.exe --version
       - name: Self-check (no network)
         shell: pwsh
         run: |
@@ -78,10 +82,45 @@ jobs:
         run: |
           cargo tree -p kareenos-desktop-agent-app --depth 1 -e normal,build
           cargo tree -p kareenos-desktop-agent-app -i tauri-runtime-wry -e normal
+      - name: Build the service (the MSI's optional feature)
+        shell: pwsh
+        run: |
+          cargo build -p kareenos-desktop-service --release
+          "KAREENOS_SERVICE_EXE=$PWD\target\release\kareenos-desktop-service.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Build the app and the MSI
         shell: pwsh
         working-directory: apps/desktop-agent
         run: tauri build --ci
+      - name: Brand screenshots (the four surfaces, for review)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath .\target\release\kareenos-desktop-agent-app.exe -ArgumentList "--brand-shots" -PassThru
+          Start-Sleep -Seconds 10
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          New-Item -ItemType Directory -Force -Path brand-shots | Out-Null
+          $bmp.Save("brand-shots\windows.png")
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          Copy-Item apps\desktop-agent\src-tauri\wix\*.bmp brand-shots\
+          Copy-Item apps\desktop-agent\src-tauri\icons\tray-*.png brand-shots\
+      - name: Service install / start / child / stop / uninstall
+        shell: pwsh
+        run: |
+          $svc = ".\target\release\kareenos-desktop-service.exe"
+          & $svc --install
+          Start-Sleep -Seconds 12
+          Get-Service KareenosDesktopService | Format-List Name, Status
+          $child = Get-Process kareenos-desktop-agent-app -ErrorAction SilentlyContinue
+          Write-Host "agent app processes started by the service: $(@($child).Count)"
+          Stop-Service KareenosDesktopService -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+          & $svc --uninstall
+          Get-Content "$env:ProgramData\Kareenos\DesktopAgent\logs\service.log" -ErrorAction SilentlyContinue
+          if (@($child).Count -lt 1) { Write-Error "the service did not start the agent app in the console session"; exit 1 }
       - name: Bundle contents
         shell: pwsh
         run: Get-ChildItem -Recurse target\release\bundle | Select-Object FullName, Length | Format-Table -AutoSize
@@ -103,8 +142,16 @@ jobs:
           path: |
             target/release/bundle/msi/*.msi
             target/release/kareenos-desktop-agent-app.exe
+            target/release/kareenos-desktop-service.exe
             Cargo.lock
           if-no-files-found: error
+      - name: Upload the brand screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brand-shots
+          path: brand-shots/
+          if-no-files-found: warn
 
   spike:
     name: Notepad spike (manual)

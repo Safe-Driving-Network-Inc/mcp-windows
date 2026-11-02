@@ -1,9 +1,15 @@
-//! "The person is using the computer" and "the person paused agents".
+//! "The person is using the computer", "the person paused agents" and, since
+//! wave 2, "the workstation is locked".
 //!
 //! HUMAN_ACTIVE: the person's last input (GetLastInputInfo) is younger than the
 //! idle window. The agent's own clicks and keystrokes count as input too, so
 //! every action notes the tick it finished at and a reading that falls within a
 //! short margin of that tick is ours, not the person's.
+//!
+//! COMPUTER_LOCKED: UI Automation can only drive the interactive desktop. When
+//! the input desktop is not the default one (the lock screen, the sign-in screen,
+//! a secure prompt) every command is answered COMPUTER_LOCKED instead of failing
+//! strangely, and the tier learns it from the `state` frame.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -21,6 +27,7 @@ pub struct Presence {
     /// GetTickCount at the end of the agent's last own input action.
     last_agent_tick: AtomicU64,
     paused: AtomicBool,
+    locked: AtomicBool,
 }
 
 impl Presence {
@@ -29,6 +36,7 @@ impl Presence {
             idle_window_ms: AtomicU64::new(idle_window_ms),
             last_agent_tick: AtomicU64::new(0),
             paused: AtomicBool::new(false),
+            locked: AtomicBool::new(false),
         }
     }
 
@@ -43,6 +51,12 @@ impl Presence {
     }
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::Relaxed)
+    }
+    pub fn set_locked(&self, on: bool) {
+        self.locked.store(on, Ordering::Relaxed);
+    }
+    pub fn is_locked(&self) -> bool {
+        self.locked.load(Ordering::Relaxed)
     }
 
     /// Call right after an action that moved the mouse or typed.
@@ -93,6 +107,63 @@ pub fn last_input_ticks() -> Option<(u32, u32)> {
     None
 }
 
+/// Is the interactive desktop reachable? false = locked / sign-in screen / a
+/// secure prompt: the input desktop cannot be opened, or it is not "Default".
+#[cfg(windows)]
+pub fn desktop_locked() -> bool {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::StationsAndDesktops::{
+        CloseDesktop, GetUserObjectInformationW, OpenInputDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS, UOI_NAME,
+    };
+    // SAFETY: plain Win32 calls; the handle is closed on every path.
+    unsafe {
+        let desk = match OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_READOBJECTS) {
+            Ok(h) => h,
+            Err(_) => return true,
+        };
+        let mut buf = [0u16; 128];
+        let mut needed: u32 = 0;
+        let ok = GetUserObjectInformationW(
+            HANDLE(desk.0),
+            UOI_NAME,
+            Some(buf.as_mut_ptr() as *mut _),
+            (buf.len() * 2) as u32,
+            Some(&mut needed),
+        )
+        .is_ok();
+        let _ = CloseDesktop(desk);
+        if !ok {
+            return false;
+        }
+        let len = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
+        let name = String::from_utf16_lossy(&buf[..len]);
+        !name.eq_ignore_ascii_case("Default")
+    }
+}
+
+#[cfg(not(windows))]
+pub fn desktop_locked() -> bool {
+    false
+}
+
+/// Which Windows session this agent runs in: ("console" | "rdp", the user name).
+#[cfg(windows)]
+pub fn session_facts() -> (String, String) {
+    use windows::Win32::System::RemoteDesktop::{ProcessIdToSessionId, WTSGetActiveConsoleSessionId};
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    let mut mine: u32 = 0;
+    // SAFETY: plain Win32 calls with an out-parameter.
+    let console = unsafe { WTSGetActiveConsoleSessionId() };
+    let ok = unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut mine) }.is_ok();
+    let kind = if ok && mine == console { "console" } else { "rdp" };
+    (kind.to_string(), std::env::var("USERNAME").unwrap_or_default())
+}
+
+#[cfg(not(windows))]
+pub fn session_facts() -> (String, String) {
+    ("console".to_string(), std::env::var("USER").unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,5 +176,8 @@ mod tests {
         assert_eq!(p.idle_window(), 3000);
         p.set_paused(true);
         assert!(p.is_paused());
+        assert!(!p.is_locked());
+        p.set_locked(true);
+        assert!(p.is_locked());
     }
 }

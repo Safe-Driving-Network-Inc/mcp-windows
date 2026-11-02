@@ -215,7 +215,7 @@ async fn main() -> ExitCode {
     }
 
     tracing::info!(version = AGENT_VERSION, url = %ws_url, "Kareenos Desktop Agent starting for {}", record.label());
-    let cfg = ClientConfig { ws_url, install_id: store::install_id(), take_over: cli.take_over, on_state: None, on_activity: None };
+    let cfg = ClientConfig { ws_url, install_id: store::install_id(), take_over: cli.take_over, on_state: None, on_activity: None, on_record: None };
     match client::run(store, record, cfg, adapter, presence, shutdown).await {
         Exit::Shutdown => ExitCode::SUCCESS,
         Exit::Superseded => {

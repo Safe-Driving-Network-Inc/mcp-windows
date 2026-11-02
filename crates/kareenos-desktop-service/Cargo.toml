@@ -1,0 +1,24 @@
+[package]
+name = "kareenos-desktop-service"
+version = "0.2.0"
+edition = "2021"
+description = "Kareenos Desktop Service — keeps the Kareenos Desktop Agent running inside the signed-in Windows session (wave 2 of the Kareenos Desktop Channel, §5.134)."
+license-file = { workspace = true }
+publish = false
+
+[[bin]]
+name = "kareenos-desktop-service"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.7"
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Threading",
+    "Win32_System_Environment",
+] }

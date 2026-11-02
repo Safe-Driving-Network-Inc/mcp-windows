@@ -1,6 +1,6 @@
 [package]
 name = "kareenos-desktop-agent"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 description = "Kareenos Desktop Agent: the Windows half of the Kareenos Desktop Channel (§5.134). Dials out to the Kareenos browser tier and runs the bounded desktop actions through Terminator."
 license-file = { workspace = true }
@@ -43,4 +43,10 @@ windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_SystemInformation",
+    # wave 2: the lock state (OpenInputDesktop) and the session facts
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Threading",
 ] }
+# wave 2: the installer's hand-off (HKLM ConnectCode / Mode)
+winreg = "0.55"

@@ -26,11 +26,14 @@ use terminator::{
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub screenshot_max_px: u32,
+    /// Contract 1.1 (from bind_ack): the cap of one file transfer and the hold window.
+    pub file_max_bytes: u64,
+    pub hold_ms: u64,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { screenshot_max_px: 1280 }
+        Settings { screenshot_max_px: 1280, file_max_bytes: envelope::FILE_MAX_BYTES_DEFAULT, hold_ms: envelope::HOLD_MS_DEFAULT }
     }
 }
 
@@ -250,10 +253,29 @@ impl Adapter {
         }
     }
 
+    /// Contract 1.1: what the tier's bind_ack carries besides `settings`.
+    pub fn apply_ack(&self, ack: &Value) {
+        let mut s = self.settings.lock().unwrap();
+        if let Some(b) = ack.get("file_max_bytes").and_then(|x| x.as_u64()).filter(|b| *b > 0) {
+            s.file_max_bytes = b;
+        }
+        if let Some(h) = ack.get("hold_ms").and_then(|x| x.as_u64()).filter(|h| *h > 0) {
+            s.hold_ms = h;
+        }
+    }
+
     pub async fn execute(&self, cmd: &CommandEnvelope, budget_ms: u64) -> ResultEnvelope {
         let action = cmd.action.as_str();
         if !envelope::is_supported(action) {
             return ResultEnvelope::failure(cmd, "UNSUPPORTED_ACTION", format!("Unsupported action: {action}"), None);
+        }
+        if action != "lane_close" && self.presence.is_locked() {
+            return ResultEnvelope::failure(
+                cmd,
+                "COMPUTER_LOCKED",
+                "This computer is locked or at the Windows sign-in screen, so nothing on its desktop can be driven. Tell the user to sign in and keep it unlocked (an unattended computer must stay signed in); retry after that.",
+                Some(json!({ "retry_after_ms": 60000 })),
+            );
         }
         if action != "lane_close" && self.presence.is_paused() {
             return ResultEnvelope::failure(

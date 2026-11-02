@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Kareenos Desktop Agent</title>
+  <link rel="stylesheet" href="fonts.css">
+  <link rel="stylesheet" href="brand.css">
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
   <header class="bar">
-    <img src="logo.png" class="logo" alt="">
-    <div>
-      <div class="title">Kareenos Desktop Agent</div>
-      <div class="sub" id="version">…</div>
-    </div>
+    <div class="lockup"><svg width="30" height="30" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="kgm" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7C3AED"/><stop offset="0.45" stop-color="#4F46E5"/><stop offset="1" stop-color="#06B6D4"/></linearGradient></defs><rect x="4" y="4" width="56" height="56" rx="18" fill="url(#kgm)"/><path d="M23 19 V45 M41 19 L23 32 M23 32 L42 45" fill="none" stroke="#fff" stroke-width="5.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="wm">kareen<b>os</b></span></div>
+    <span class="kick">Desktop Agent</span>
+    <span class="ver" id="version">…</span>
     <div class="spacer"></div>
     <span class="chip muted" id="chip">Starting…</span>
   </header>
@@ -20,50 +20,57 @@
   <main>
     <!-- First run -->
     <section id="view-welcome" class="view hidden">
-      <h1>Welcome</h1>
-      <p class="lead">Your Kareenos agents can now work in the programs on this computer while you are at your desk. Three steps:</p>
+      <p class="kick">Welcome</p>
+      <h1>Your agents, in your programs</h1>
+      <p class="lead">Your Kareenos agents can work in the programs on this computer. Three steps:</p>
       <ol class="steps">
         <li><b>Installed.</b> The Desktop Agent lives in the tray, next to the clock, and starts with Windows.</li>
-        <li><b>Connect this computer to a project.</b> In Kareenos open <b>Browsers &amp; Desktops</b>, pick the project and click <b>Connect this computer</b>. When the browser asks, allow it to open the Kareenos Desktop Agent.
-          <div class="row"><button id="w-open" class="primary">Open Kareenos</button></div>
+        <li><b>Connect this computer.</b> In Kareenos open <b>Browsers &amp; Desktops</b> and click <b>Connect this computer</b>, or add it under <b>Computers</b> and copy its connection code. When the browser asks, allow it to open the Kareenos Desktop Agent.
+          <div class="row"><button id="w-open" class="primary"><svg viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>Open Kareenos</button></div>
         </li>
         <li><b>If nothing happened,</b> paste the connection code the page shows:
           <div class="row"><textarea id="w-code" rows="3" placeholder="Connection code" spellcheck="false"></textarea></div>
-          <div class="row"><button id="w-paste" class="ghost">Paste</button><button id="w-connect" class="primary">Connect</button></div>
+          <div class="row"><button id="w-paste" class="ghost"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>Paste</button><button id="w-connect" class="primary">Connect</button></div>
         </li>
       </ol>
       <p class="muted">Agents pause while you use the mouse or keyboard. <b>Pause agents</b> in the tray menu stops them entirely. The agent never asks for, and never types, a password.</p>
     </section>
 
-    <!-- Sign in (not the first run, or a new project) -->
+    <!-- Sign in (not the first run, or a new sign-in) -->
     <section id="view-signin" class="view hidden">
-      <h1>Sign in</h1>
-      <p class="lead">Connect this computer to a Kareenos project. In Kareenos open <b>Browsers &amp; Desktops</b>, pick the project and click <b>Connect this computer</b>; allow the browser to open this app.</p>
-      <div class="row"><button id="s-open" class="primary">Open Kareenos</button></div>
+      <p class="kick">Sign in</p>
+      <h1>Connect this computer</h1>
+      <p class="lead">In Kareenos open <b>Browsers &amp; Desktops</b> and click <b>Connect this computer</b>, or copy a computer's connection code from <b>Computers</b>; allow the browser to open this app.</p>
+      <div class="row"><button id="s-open" class="primary"><svg viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>Open Kareenos</button></div>
       <h2>Or paste the connection code</h2>
       <div class="row"><textarea id="s-code" rows="3" placeholder="Connection code" spellcheck="false"></textarea></div>
-      <div class="row"><button id="s-paste" class="ghost">Paste</button><button id="s-connect" class="primary">Connect</button></div>
+      <div class="row"><button id="s-paste" class="ghost"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>Paste</button><button id="s-connect" class="primary">Connect</button></div>
       <p class="muted" id="s-note"></p>
     </section>
 
     <!-- Signed in -->
     <section id="view-connected" class="view hidden">
-      <h1 id="c-title">Connected</h1>
+      <p class="kick" id="c-kick">This computer</p>
+      <div class="panel">
+        <div class="name"><span id="c-computer">—</span><span class="code hidden" id="c-code"></span></div>
+        <p class="sub" id="c-sub"></p>
+        <div class="line"><span class="dot quiet" id="c-dot"></span><span id="c-state">—</span></div>
+        <div class="line hidden" id="c-actor-line"><svg viewBox="0 0 24 24"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg><span id="c-actor"></span></div>
+      </div>
       <div class="card">
         <div class="kv">
-          <div class="k">Project</div><div class="v" id="c-project">—</div>
           <div class="k">Account</div><div class="v" id="c-account">—</div>
+          <div class="k">Project</div><div class="v" id="c-project">—</div>
           <div class="k">Signed in as</div><div class="v" id="c-user">—</div>
-          <div class="k">Status</div><div class="v" id="c-state">—</div>
           <div class="k">Right now</div><div class="v" id="c-busy">idle</div>
         </div>
       </div>
       <p class="muted" id="c-hint"></p>
       <div class="row">
-        <button id="c-pause">Pause agents</button>
-        <button id="c-takeover" class="hidden">Use this computer</button>
+        <button id="c-pause"><svg viewBox="0 0 24 24"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg><span id="c-pause-text">Pause agents</span></button>
+        <button id="c-takeover" class="hidden"><svg viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>Use this computer</button>
         <button id="c-diag" class="ghost">Diagnostics</button>
-        <button id="c-signout" class="danger">Sign out</button>
+        <button id="c-signout" class="danger"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>Sign out</button>
         <div class="spacer"></div>
         <button id="c-close" class="ghost">Close</button>
       </div>
@@ -72,7 +79,7 @@
     <div id="msg" class="msg hidden"></div>
   </main>
 
-  <footer class="foot"><a href="#" id="lnk-help">Help</a> · <a href="#" id="lnk-diag">Diagnostics</a> · <span id="f-host"></span></footer>
+  <footer class="foot"><a href="#" id="lnk-help">Help</a> · <a href="#" id="lnk-diag">Diagnostics</a><div class="spacer"></div><span class="mono" id="f-host"></span></footer>
 
   <script src="app.js"></script>
 </body>

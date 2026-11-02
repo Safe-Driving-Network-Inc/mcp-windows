@@ -37,7 +37,11 @@ const SUPERSEDED_RETRY_MS: u64 = 60_000;
 const RENEW_MARGIN_SEC: i64 = 7 * 86_400;
 const OUTBOX_MAX: usize = 20;
 const OUTBOX_TTL_MS: u64 = 90_000;
-const TERMINAL_REASONS: &[&str] = &["MISSING_TOKEN", "INVALID_TOKEN", "EXPIRED", "INCOMPLETE_TENANT", "REVOKED", "WRONG_CHANNEL"];
+const TERMINAL_REASONS: &[&str] = &[
+    "MISSING_TOKEN", "INVALID_TOKEN", "EXPIRED", "INCOMPLETE_TENANT", "REVOKED", "WRONG_CHANNEL",
+    // contract 1.1: this record can never bind again as it is
+    "COMPUTER_MISMATCH", "COMPUTER_REVOKED", "INVALID_CODE",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnState {
@@ -67,6 +71,8 @@ enum Ended {
 
 /// Observer for a UI (the tray app): called on every connection state change.
 pub type StateHook = Arc<dyn Fn(ConnState) + Send + Sync>;
+/// Observer for a UI: the stored record changed (a token arrived, the computer is known).
+pub type RecordHook = Arc<dyn Fn(ConnectionRecord) + Send + Sync>;
 
 pub struct ClientConfig {
     pub ws_url: String,
@@ -77,6 +83,8 @@ pub struct ClientConfig {
     pub on_state: Option<StateHook>,
     /// Command started / finished, for a UI overlay. None in the console binary.
     pub on_activity: Option<ActivityHook>,
+    /// The record changed (contract 1.1: the computer from bind_ack, the token after a code bind).
+    pub on_record: Option<RecordHook>,
 }
 
 /// What the queue and the pause watcher share with the live socket.
@@ -193,21 +201,30 @@ pub async fn run(
     let shared = Arc::new(Shared::new(cfg.on_state.clone()));
     let queue = Queue::spawn_with_hook(adapter.clone(), sink_for(shared.clone()), cfg.on_activity.clone());
 
-    // The pause flag (tray / file) → state frames.
+    // The pause flag (tray / file) and the lock state → state frames (contract
+    // 1.1 adds `locked` and the session facts; a 1.0 tier ignores them).
     {
         let shared = shared.clone();
         let presence = presence.clone();
         let shutdown = shutdown.clone();
         tokio::spawn(async move {
+            let (session_kind, session_user) = crate::presence::session_facts();
             loop {
                 if shutdown.is_cancelled() {
                     break;
                 }
                 let on = store::is_paused_flag_set();
-                if on != presence.is_paused() {
+                let locked = crate::presence::desktop_locked();
+                let pause_changed = on != presence.is_paused();
+                let lock_changed = locked != presence.is_locked();
+                if pause_changed || lock_changed {
                     presence.set_paused(on);
-                    tracing::info!(paused = on, "pause flag changed");
-                    shared.send(&json!({ "type": "state", "paused": on, "human_active": presence.human_active().is_some() }));
+                    presence.set_locked(locked);
+                    tracing::info!(paused = on, locked, "state changed");
+                    shared.send(&json!({
+                        "type": "state", "paused": on, "human_active": presence.human_active().is_some(), "locked": locked,
+                        "session": { "kind": session_kind, "user": session_user }
+                    }));
                 }
                 tokio::time::sleep(Duration::from_millis(2000)).await;
             }
@@ -277,11 +294,26 @@ async fn sleep_or_shutdown(ms: u64, shutdown: &CancellationToken) {
     }
 }
 
-fn persist_renewal(store: &TokenStore, record: &mut ConnectionRecord, frame: &Value) {
+fn persist_renewal(store: &TokenStore, record: &mut ConnectionRecord, frame: &Value) -> bool {
     let mut changed = false;
     if let Some(t) = frame.get("token").and_then(|t| t.as_str()).filter(|t| !t.is_empty()) {
         record.token = t.to_string();
+        // A code record became a token record: the one-time code is spent.
+        if record.code.is_some() {
+            if let Some(c) = record.code.take() {
+                store::mark_connect_code_used(&c);
+            }
+        }
         changed = true;
+    }
+    // Contract 1.1: the computer this socket belongs to.
+    if let Some(c) = frame.get("computer").filter(|c| c.is_object()) {
+        if let Ok(parsed) = serde_json::from_value::<crate::record::ComputerRef>(c.clone()) {
+            if record.computer.as_ref() != Some(&parsed) {
+                record.computer = Some(parsed);
+                changed = true;
+            }
+        }
     }
     if let Some(e) = frame.get("exp").and_then(|e| e.as_i64()) {
         record.exp = Some(e);
@@ -295,8 +327,15 @@ fn persist_renewal(store: &TokenStore, record: &mut ConnectionRecord, frame: &Va
         if let Err(e) = store.save(record) {
             tracing::warn!(error = %e, "could not persist the renewed token (keeping it in memory)");
         } else {
-            tracing::info!(exp = ?record.exp, renewable = ?record.renewable, "token record saved");
+            tracing::info!(exp = ?record.exp, renewable = ?record.renewable, computer = %record.computer.as_ref().map(|c| c.label()).unwrap_or_default(), "token record saved");
         }
+    }
+    changed
+}
+
+fn notify_record(cfg: &ClientConfig, record: &ConnectionRecord) {
+    if let Some(h) = &cfg.on_record {
+        h(record.clone());
     }
 }
 
@@ -328,7 +367,13 @@ async fn connect_once(
     });
     shared.set_writer(Some(tx.clone()));
 
-    let bind = json!({ "type": "bind", "token": record.token, "client": client_info(&cfg.install_id) });
+    // A v2 record binds with its one-time code the first time; the tier answers
+    // with a `token` frame first, then the bind_ack. Everything else binds with the token.
+    let bind = if record.is_code_only() {
+        json!({ "type": "bind", "code": record.code.clone().unwrap_or_default(), "client": client_info(&cfg.install_id) })
+    } else {
+        json!({ "type": "bind", "token": record.token, "client": client_info(&cfg.install_id) })
+    };
     let _ = tx.send(Message::Text(bind.to_string()));
 
     let mut bound = false;
@@ -363,18 +408,28 @@ async fn connect_once(
                         match frame.get("type").and_then(|t| t.as_str()).unwrap_or("") {
                             "bind_ack" => {
                                 if frame.get("ok").and_then(|o| o.as_bool()) == Some(true) {
-                                    persist_renewal(store, record, &frame);
+                                    if persist_renewal(store, record, &frame) {
+                                        notify_record(cfg, record);
+                                    }
                                     if let Some(settings) = frame.get("settings") {
                                         adapter.apply_settings(settings);
+                                    }
+                                    adapter.apply_ack(&frame);
+                                    if let Some(c) = frame.get("contract").and_then(|c| c.as_str()) {
+                                        if c != crate::envelope::CONTRACT_VERSION {
+                                            tracing::info!(tier = c, agent = crate::envelope::CONTRACT_VERSION, "contract versions differ (additive; both halves keep working)");
+                                        }
                                     }
                                     bound = true;
                                     shared.set_bound(true);
                                     shared.set_state(ConnState::Bound);
                                     tracing::info!(instance = ?frame.get("instance_id"), renewed = frame.get("token").is_some(), exp = ?record.exp, "bound — waiting for commands ({})", record.label());
                                     shared.flush_outbox();
-                                    // Tell the server about a pause that was already on.
-                                    if presence.is_paused() {
-                                        shared.send(&json!({ "type": "state", "paused": true, "human_active": false }));
+                                    // Tell the server about a pause or a lock that was already on.
+                                    if presence.is_paused() || presence.is_locked() {
+                                        let (session_kind, session_user) = crate::presence::session_facts();
+                                        shared.send(&json!({ "type": "state", "paused": presence.is_paused(), "human_active": false, "locked": presence.is_locked(),
+                                            "session": { "kind": session_kind, "user": session_user } }));
                                     }
                                     let now_secs = chrono::Utc::now().timestamp();
                                     if record.renewable != Some(false) && record.seconds_to_expiry(now_secs).map(|s| s < RENEW_MARGIN_SEC).unwrap_or(true) {
@@ -403,7 +458,11 @@ async fn connect_once(
                                     Err(e) => tracing::warn!(error = %e, "malformed command frame ignored"),
                                 }
                             }
-                            "token" => persist_renewal(store, record, &frame),
+                            "token" => {
+                                if persist_renewal(store, record, &frame) {
+                                    notify_record(cfg, record);
+                                }
+                            }
                             "pong" => { pong_deadline = None; }
                             "superseded" => {
                                 tracing::warn!(by = ?frame.get("by"), "another computer took this project's slot");

@@ -1,11 +1,44 @@
 //! The connection record the Kareenos sign-in page hands over, either as the
 //! `kareenos-desktop://connect?p=<base64url JSON>` link or as the same code
 //! pasted by hand. It becomes the stored sign-in (token record) of this computer.
+//!
+//! Two shapes (contract 1.1):
+//! * `v: 1` — a TOKEN record: the Browsers card's "Connect this computer" minted a
+//!   session and its token; the agent binds with the token.
+//! * `v: 2` — a CODE record: a registered computer's one-time connection code
+//!   (the Computers table, or the MSI's `CONNECT_CODE` of a silent install); the
+//!   agent binds with the code once and receives its token in a `token` frame,
+//!   which replaces the code in the stored record.
 
 use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+
+/// The computer this sign-in belongs to (from a v2 record or the tier's bind_ack).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ComputerRef {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+impl ComputerRef {
+    /// "Lab PC (LAB-01)", "LAB-01", "Lab PC", or empty.
+    pub fn label(&self) -> String {
+        match (self.name.as_deref().filter(|s| !s.is_empty()), self.code.as_deref().filter(|s| !s.is_empty())) {
+            (Some(n), Some(c)) => format!("{n} ({c})"),
+            (Some(n), None) => n.to_string(),
+            (None, Some(c)) => c.to_string(),
+            (None, None) => String::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ConnectionRecord {
@@ -13,7 +46,14 @@ pub struct ConnectionRecord {
     pub v: u32,
     #[serde(default)]
     pub channel: String,
+    /// Empty on a v2 code record until the first bind answers with a token.
+    #[serde(default)]
     pub token: String,
+    /// v2: the one-time connection code of a registered computer.
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub computer: Option<ComputerRef>,
     #[serde(default)]
     pub exp: Option<i64>,
     #[serde(default)]
@@ -85,8 +125,8 @@ impl ConnectionRecord {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.token.trim().is_empty() {
-            return Err(anyhow!("the connection record has no token"));
+        if self.token.trim().is_empty() && !self.is_code_only() {
+            return Err(anyhow!("the connection record has neither a token nor a connection code"));
         }
         if !self.channel.is_empty() && self.channel != "desktop" {
             return Err(anyhow!(
@@ -97,17 +137,26 @@ impl ConnectionRecord {
         Ok(())
     }
 
+    /// A v2 record that still has to exchange its code for a token.
+    pub fn is_code_only(&self) -> bool {
+        self.token.trim().is_empty() && self.code.as_deref().map(str::trim).map(|c| !c.is_empty()).unwrap_or(false)
+    }
+
     /// The code form (what the sign-in page shows), for round trips and tests.
     pub fn to_code(&self) -> String {
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(self).unwrap_or_default())
     }
 
-    /// A human label for logs and the tray: never the token.
+    /// A human label for logs and the tray: never the token, never the code.
     pub fn label(&self) -> String {
+        let account = self.account_name.clone().unwrap_or_else(|| self.accountid.clone().unwrap_or_default());
+        if let Some(c) = self.computer.as_ref().map(|c| c.label()).filter(|l| !l.is_empty()) {
+            return if account.is_empty() { c } else { format!("{c} · {account}") };
+        }
         format!(
             "{} · {} · {}",
             self.project_name.clone().unwrap_or_else(|| self.projectid.clone().unwrap_or_default()),
-            self.account_name.clone().unwrap_or_else(|| self.accountid.clone().unwrap_or_default()),
+            account,
             self.user_name.clone().unwrap_or_else(|| self.userid.clone().unwrap_or_default())
         )
     }
@@ -126,6 +175,8 @@ mod tests {
             v: 1,
             channel: "desktop".into(),
             token: "tok".into(),
+            code: None,
+            computer: None,
             exp: Some(1_800_000_000),
             session_id: Some("s1".into()),
             projectid: Some("pr".into()),
@@ -163,5 +214,25 @@ mod tests {
         let r = sample();
         assert!(!r.label().contains("tok"));
         assert!(r.label().contains("Sales"));
+    }
+
+    #[test]
+    fn a_v2_code_record_parses_and_labels_by_computer() {
+        let json = r#"{"v":2,"channel":"desktop","code":"s3cr3t","computer":{"id":"C1","name":"Lab PC","code":"LAB-01","mode":"attended"},"account_name":"Acme","ws_url":"wss://x/desktop-channel","api_url":"https://x/api"}"#;
+        let b64 = URL_SAFE_NO_PAD.encode(json.as_bytes());
+        let r = ConnectionRecord::from_any(&b64).unwrap();
+        assert!(r.is_code_only());
+        assert_eq!(r.v, 2);
+        assert_eq!(r.label(), "Lab PC (LAB-01) · Acme");
+        assert!(!r.label().contains("s3cr3t"));
+        // An empty record (no token, no code) is refused.
+        let empty = URL_SAFE_NO_PAD.encode(br#"{"v":2,"channel":"desktop"}"#);
+        assert!(ConnectionRecord::from_any(&empty).is_err());
+        // Once the token arrives the record is a normal one.
+        let mut got = r.clone();
+        got.token = "tok".into();
+        got.code = None;
+        assert!(!got.is_code_only());
+        assert!(got.validate().is_ok());
     }
 }
