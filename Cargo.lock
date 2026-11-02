@@ -3315,7 +3315,7 @@ dependencies = [
 
 [[package]]
 name = "kareenos-desktop-agent"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3344,7 +3344,7 @@ dependencies = [
 
 [[package]]
 name = "kareenos-desktop-agent-app"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3370,7 +3370,7 @@ dependencies = [
 
 [[package]]
 name = "kareenos-desktop-service"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "windows 0.61.3",

@@ -133,10 +133,13 @@ impl Status {
             self.computer_code = c.code.clone().unwrap_or_default();
             self.computer_mode = c.mode.clone().unwrap_or_default();
         }
+        // Where "Open Kareenos" goes: the console named by the record, else the
+        // public console. Never the API host (0.2.0 derived it from api_url and
+        // landed on the API's ResourceNotFound page).
         self.app_url = r
-            .api_url
+            .app_url
             .as_deref()
-            .map(|u| u.trim_end_matches('/').trim_end_matches("/api").to_string())
+            .map(|u| u.trim_end_matches('/').to_string())
             .filter(|u| !u.is_empty())
             .unwrap_or_else(|| DEFAULT_APP_URL.to_string());
     }

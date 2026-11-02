@@ -74,6 +74,10 @@ pub struct ConnectionRecord {
     pub ws_url: Option<String>,
     #[serde(default)]
     pub api_url: Option<String>,
+    /// The console (SPA) the person signs in on — where "Open Kareenos" goes. The
+    /// API host is NOT it (the API answers ResourceNotFound for console routes).
+    #[serde(default)]
+    pub app_url: Option<String>,
     /// false once the absolute max age has passed (the server stops re-issuing).
     #[serde(default)]
     pub renewable: Option<bool>,
@@ -187,6 +191,7 @@ mod tests {
             user_name: Some("Noura".into()),
             ws_url: Some("wss://example.test:8092/desktop-channel".into()),
             api_url: Some("https://example.test/api".into()),
+            app_url: Some("https://console.example.test".into()),
             renewable: None,
         }
     }

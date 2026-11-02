@@ -337,8 +337,12 @@ fn check_updates(app: AppHandle) {
     check_updates_now(app);
 }
 
+// async on purpose: a window built from inside a SYNCHRONOUS command blocks the
+// main thread on Windows (the build waits for the event loop the command is
+// holding) — the 0.2.0 "blank Diagnostics window and the app is stuck". An async
+// command runs off the main thread and the build is dispatched to it.
 #[tauri::command]
-fn open_diagnostics(app: AppHandle) {
+async fn open_diagnostics(app: AppHandle) {
     show_diagnostics(&app);
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "kareenos-desktop-service"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Kareenos Desktop Service — keeps the Kareenos Desktop Agent running inside the signed-in Windows session (wave 2 of the Kareenos Desktop Channel, §5.134)."
 license-file = { workspace = true }
