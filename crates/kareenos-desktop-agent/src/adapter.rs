@@ -1536,8 +1536,21 @@ pub(crate) fn navigation_only(keys: &str) -> bool {
 /// Read straight from UI Automation (Terminator does not surface the property).
 #[cfg(windows)]
 pub(crate) fn focused_is_password() -> bool {
-    match uiautomation::UIAutomation::new_direct() {
-        Ok(ua) => ua.get_focused_element().and_then(|e| e.get_is_password()).unwrap_or(false),
+    // The property route Terminator itself uses for booleans (get_property_value →
+    // Variant → bool); the crate has no get_is_password().
+    let ua = match uiautomation::UIAutomation::new_direct() {
+        Ok(u) => u,
+        Err(_) => return false,
+    };
+    let el = match ua.get_focused_element() {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+    match el.get_property_value(uiautomation::types::UIProperty::IsPassword) {
+        Ok(v) => {
+            let b: Result<bool, _> = v.try_into();
+            b.unwrap_or(false)
+        }
         Err(_) => false,
     }
 }
