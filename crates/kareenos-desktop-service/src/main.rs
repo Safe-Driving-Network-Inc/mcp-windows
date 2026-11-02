@@ -116,7 +116,7 @@ mod win {
             let dir = wide(&exe.parent().map(|p| p.display().to_string()).unwrap_or_else(|| ".".to_string()));
             let mut pi = PROCESS_INFORMATION::default();
             let created = CreateProcessAsUserW(
-                token,
+                Some(token),
                 PCWSTR::null(),
                 Some(PWSTR(cmd.as_mut_ptr())),
                 None,
