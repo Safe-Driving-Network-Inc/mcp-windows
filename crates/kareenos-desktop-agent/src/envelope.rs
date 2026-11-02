@@ -7,17 +7,27 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub const CHANNEL: &str = "desktop";
+/// The contract this agent speaks (the tier's bind_ack names its own). 1.1 = wave 2:
+/// computers as first-class objects (commands carry `computer_id` and `actor`), the
+/// three file actions, the hold (COMPUTER_BUSY) and the lock state (COMPUTER_LOCKED).
+pub const CONTRACT_VERSION: &str = "1.1";
 
 pub const ACTIONS: &[&str] = &[
     "snapshot", "apps", "open", "focus", "read", "screenshot", "scroll", "wait", "click", "fill",
-    "press", "run_steps", "lane_close",
+    "press", "run_steps", "lane_close", "file_list", "file_get", "file_put",
 ];
-pub const READ_CLASS_ACTIONS: &[&str] =
-    &["snapshot", "apps", "open", "focus", "read", "screenshot", "scroll", "wait", "lane_close"];
-pub const SIDE_EFFECTING_ACTIONS: &[&str] = &["click", "press"];
+pub const READ_CLASS_ACTIONS: &[&str] = &[
+    "snapshot", "apps", "open", "focus", "read", "screenshot", "scroll", "wait", "lane_close", "file_list", "file_get",
+];
+/// file_put (v1.1) writes onto the disk: gated like a click.
+pub const SIDE_EFFECTING_ACTIONS: &[&str] = &["click", "press", "file_put"];
+/// The three of v1.1; never inside run_steps.
+pub const FILE_ACTIONS: &[&str] = &["file_list", "file_get", "file_put"];
 /// Actions that never fight the person for the mouse or keyboard: they run even
-/// while the person is active. Everything else answers HUMAN_ACTIVE first.
-pub const HUMAN_SAFE_ACTIONS: &[&str] = &["snapshot", "apps", "read", "screenshot", "wait", "lane_close"];
+/// while the person is active. Everything else answers HUMAN_ACTIVE first. The
+/// file actions touch no input device.
+pub const HUMAN_SAFE_ACTIONS: &[&str] =
+    &["snapshot", "apps", "read", "screenshot", "wait", "lane_close", "file_list", "file_get", "file_put"];
 
 /// Per-action await windows (ms) — mirrors ACTION_TIMEOUT_MS in the backend.
 pub const ACTION_DEFAULT_MS: &[(&str, u64)] = &[
@@ -34,6 +44,9 @@ pub const ACTION_DEFAULT_MS: &[(&str, u64)] = &[
     ("press", 17000),
     ("run_steps", 290000),
     ("lane_close", 8000),
+    ("file_list", 15000),
+    ("file_get", 120000),
+    ("file_put", 120000),
 ];
 /// The agent answers TIMEOUT itself this long before the server stops listening.
 pub const TIMEOUT_MARGIN_MS: u64 = 3000;
@@ -45,6 +58,14 @@ pub const MAX_RESULT_BYTES: usize = 600 * 1024;
 pub const RUN_STEPS_MAX: usize = 25;
 pub const RUN_STEPS_ALLOWED: &[&str] =
     &["snapshot", "focus", "read", "screenshot", "scroll", "wait", "click", "fill", "press"];
+/// Files (v1.1): a file_get streams `file_chunk` frames of this size before its result;
+/// a file above the cap is refused (FILE_TOO_LARGE). The cap's platform default; the
+/// bind_ack carries the effective value.
+pub const FILE_CHUNK_BYTES: usize = 256 * 1024;
+pub const FILE_MAX_BYTES_DEFAULT: u64 = 50 * 1024 * 1024;
+/// The hold (v1.1): one user's run drives a computer at a time, a sliding window the
+/// holder's commands refresh. The platform's default; the bind_ack carries the value.
+pub const HOLD_MS_DEFAULT: u64 = 90_000;
 
 pub fn is_supported(action: &str) -> bool {
     ACTIONS.contains(&action)
@@ -87,6 +108,35 @@ pub struct CommandEnvelope {
     pub action: String,
     #[serde(default)]
     pub args: Value,
+    /// v1.1: the computer this command drives (the bound socket knows; kept for the log).
+    #[serde(default)]
+    pub computer_id: Option<String>,
+    /// v1.1: who is acting, for the overlay pill ("Sara's Invoice Clerk · typing").
+    #[serde(default)]
+    pub actor: Option<Actor>,
+}
+
+/// v1.1: the names behind a command. Names only, never ids.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Actor {
+    #[serde(default)]
+    pub user_name: Option<String>,
+    #[serde(default)]
+    pub agent_name: Option<String>,
+}
+
+impl Actor {
+    /// "Sara's Invoice Clerk", "Invoice Clerk", "Sara", or None.
+    pub fn label(&self) -> Option<String> {
+        let user = self.user_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let agent = self.agent_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        match (user, agent) {
+            (Some(u), Some(a)) => Some(format!("{u}'s {a}")),
+            (None, Some(a)) => Some(a.to_string()),
+            (Some(u), None) => Some(u.to_string()),
+            (None, None) => None,
+        }
+    }
 }
 
 impl CommandEnvelope {
@@ -95,6 +145,10 @@ impl CommandEnvelope {
     }
     pub fn lane(&self) -> String {
         self.lane_id.clone().unwrap_or_else(|| "default".to_string())
+    }
+    /// The actor's label for the overlay, when the command carries one.
+    pub fn actor_label(&self) -> Option<String> {
+        self.actor.as_ref().and_then(|a| a.label())
     }
 }
 
@@ -207,7 +261,7 @@ mod tests {
 
     #[test]
     fn action_table_is_complete_and_classified() {
-        assert_eq!(ACTIONS.len(), 13);
+        assert_eq!(ACTIONS.len(), 16);
         for a in ACTIONS {
             assert!(default_ms(a) > 0, "{a}");
             let classes = [is_read_class(a), is_side_effecting(a), *a == "fill", *a == "run_steps"]
@@ -220,6 +274,12 @@ mod tests {
             assert!(is_supported(a) && *a != "run_steps" && *a != "open" && *a != "apps" && *a != "lane_close");
         }
         assert!(!is_supported("run_command"));
+        for a in FILE_ACTIONS {
+            assert!(is_supported(a) && is_human_safe(a) && !RUN_STEPS_ALLOWED.contains(a), "{a}");
+        }
+        assert!(is_side_effecting("file_put") && is_read_class("file_get") && is_read_class("file_list"));
+        assert_eq!(default_ms("file_get"), 120000);
+        assert_eq!(CONTRACT_VERSION, "1.1");
     }
 
     #[test]
@@ -231,6 +291,15 @@ mod tests {
             serde_json::from_str(r#"{"command_id":"c1","action":"click","args":{"ref":"e3"}}"#).unwrap();
         assert_eq!(cmd.correlation(), "c1");
         assert_eq!(cmd.lane(), "default");
+        assert!(cmd.computer_id.is_none() && cmd.actor_label().is_none(), "a v1 command parses as before");
+        let v11: CommandEnvelope = serde_json::from_str(
+            r#"{"command_id":"c2","action":"fill","args":{},"computer_id":"C1","actor":{"user_name":"Sara","agent_name":"Invoice Clerk"}}"#,
+        )
+        .unwrap();
+        assert_eq!(v11.computer_id.as_deref(), Some("C1"));
+        assert_eq!(v11.actor_label().as_deref(), Some("Sara's Invoice Clerk"));
+        assert_eq!(Actor { user_name: None, agent_name: Some("Clerk".into()) }.label().as_deref(), Some("Clerk"));
+        assert_eq!(Actor { user_name: Some(" ".into()), agent_name: None }.label(), None);
         let f = ResultEnvelope::failure(&cmd, "AMBIGUOUS", "two", Some(json!({"candidates":[{"ref":"e1"}]})));
         assert_eq!(f.status, "failed");
         assert!(f.message.starts_with("[AMBIGUOUS]"));
