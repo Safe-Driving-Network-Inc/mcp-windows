@@ -19,6 +19,7 @@ use crate::record::ConnectionRecord;
 use crate::store::{self, TokenStore};
 use crate::AGENT_VERSION;
 use anyhow::{anyhow, Context, Result};
+use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
@@ -200,6 +201,8 @@ pub async fn run(
 ) -> Exit {
     let shared = Arc::new(Shared::new(cfg.on_state.clone()));
     let queue = Queue::spawn_with_hook(adapter.clone(), sink_for(shared.clone()), cfg.on_activity.clone());
+    // Contract 1.1: a file_get streams file_chunk frames on the same socket.
+    adapter.set_frame_sink(sink_for(shared.clone()));
 
     // The pause flag (tray / file) and the lock state → state frames (contract
     // 1.1 adds `locked` and the session facts; a 1.0 tier ignores them).
@@ -415,6 +418,11 @@ async fn connect_once(
                                         adapter.apply_settings(settings);
                                     }
                                     adapter.apply_ack(&frame);
+                                    // The computer's file roots, set by its owner in the console.
+                                    if let Some(pol) = frame.get("computer").and_then(|c| c.get("policy")) {
+                                        let list = |k: &str| pol.get(k).and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default();
+                                        adapter.set_remote_roots(list("file_roots"), list("file_put_roots"));
+                                    }
                                     if let Some(c) = frame.get("contract").and_then(|c| c.as_str()) {
                                         if c != crate::envelope::CONTRACT_VERSION {
                                             tracing::info!(tier = c, agent = crate::envelope::CONTRACT_VERSION, "contract versions differ (additive; both halves keep working)");
@@ -461,6 +469,17 @@ async fn connect_once(
                             "token" => {
                                 if persist_renewal(store, record, &frame) {
                                     notify_record(cfg, record);
+                                }
+                            }
+                            // Contract 1.1: the bytes of a file_put, ahead of the action that writes them.
+                            "file_chunk" => {
+                                let id = frame.get("command_id").and_then(|v| v.as_str()).unwrap_or("");
+                                let seq = frame.get("seq").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                                let total = frame.get("total").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+                                let b64 = frame.get("bytes_base64").and_then(|v| v.as_str()).unwrap_or("");
+                                match base64::engine::general_purpose::STANDARD.decode(b64) {
+                                    Ok(bytes) if !id.is_empty() => adapter.push_chunk(id, seq, total, bytes),
+                                    _ => tracing::warn!("malformed file_chunk frame ignored"),
                                 }
                             }
                             "pong" => { pong_deadline = None; }

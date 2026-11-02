@@ -11,8 +11,12 @@
 use crate::envelope::{self, CommandEnvelope, ResultEnvelope, MAX_RESULT_BYTES, RUN_STEPS_ALLOWED, RUN_STEPS_MAX};
 use crate::policy::LocalPolicy;
 use crate::presence::Presence;
+use crate::queue::Sink;
 use crate::refbook::{pick_candidate, Bounds, LaneBook, RefBook, RefEntry, RefError, Root};
 use base64::Engine;
+use sha2::Digest;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
@@ -228,17 +232,76 @@ fn tree_cfg(include_all_bounds: bool, with_values: bool, depth: usize) -> TreeBu
     }
 }
 
+/// The bytes of a `file_put` as they arrive in `file_chunk` frames, until the action runs.
+#[derive(Default)]
+struct ChunkBuf {
+    total: usize,
+    parts: HashMap<usize, Vec<u8>>,
+    at: u64,
+}
+
 pub struct Adapter {
     desktop: Arc<Desktop>,
     refbook: RefBook,
     policy: LocalPolicy,
     presence: Arc<Presence>,
     settings: Mutex<Settings>,
+    /// Where `file_chunk` frames of a `file_get` go (the client's socket / outbox); None in tests.
+    frame_sink: Mutex<Option<Sink>>,
+    /// Inbound chunks of `file_put` commands, by command id.
+    chunks: Mutex<HashMap<String, ChunkBuf>>,
+    /// The computer's file roots from the platform (its owner's settings), read and write.
+    remote_roots: Mutex<(Vec<String>, Vec<String>)>,
 }
 
 impl Adapter {
     pub fn new(desktop: Arc<Desktop>, policy: LocalPolicy, presence: Arc<Presence>) -> Self {
-        Adapter { desktop, refbook: RefBook::new(), policy, presence, settings: Mutex::new(Settings::default()) }
+        Adapter {
+            desktop,
+            refbook: RefBook::new(),
+            policy,
+            presence,
+            settings: Mutex::new(Settings::default()),
+            frame_sink: Mutex::new(None),
+            chunks: Mutex::new(HashMap::new()),
+            remote_roots: Mutex::new((vec![], vec![])),
+        }
+    }
+
+    /// The client hands over its sink once the socket machinery exists.
+    pub fn set_frame_sink(&self, sink: Sink) {
+        *self.frame_sink.lock().unwrap() = Some(sink);
+    }
+    /// The computer's roots from bind_ack (`computer.policy.file_roots` / `file_put_roots`).
+    pub fn set_remote_roots(&self, read: Vec<String>, write: Vec<String>) {
+        *self.remote_roots.lock().unwrap() = (read, write);
+    }
+    /// A `file_chunk` frame of a pending `file_put` arrived (the client calls this).
+    pub fn push_chunk(&self, command_id: &str, seq: usize, total: usize, bytes: Vec<u8>) {
+        let mut all = self.chunks.lock().unwrap();
+        let now = envelope::now_ms();
+        all.retain(|_, b| now.saturating_sub(b.at) < 10 * 60_000);
+        let buf = all.entry(command_id.to_string()).or_default();
+        buf.total = total.max(buf.total);
+        buf.at = now;
+        buf.parts.insert(seq, bytes);
+    }
+    fn take_chunks(&self, command_id: &str) -> Option<Vec<u8>> {
+        let mut all = self.chunks.lock().unwrap();
+        let buf = all.get(command_id)?;
+        if buf.total == 0 || buf.parts.len() < buf.total {
+            return None;
+        }
+        let buf = all.remove(command_id)?;
+        let mut out = Vec::new();
+        for i in 0..buf.total {
+            out.extend_from_slice(buf.parts.get(&i)?);
+        }
+        Some(out)
+    }
+    fn chunks_received(&self, command_id: &str) -> (usize, usize) {
+        let all = self.chunks.lock().unwrap();
+        all.get(command_id).map(|b| (b.parts.len(), b.total)).unwrap_or((0, 0))
     }
 
     /// Platform-driven settings from bind_ack: `{ human_idle_ms, screenshot_max_px }`.
@@ -300,7 +363,7 @@ impl Adapter {
         let out = if action == "run_steps" {
             self.run_steps(&lane, &cmd.args, budget_ms).await
         } else {
-            self.run_single(&lane, action, &cmd.args, budget_ms).await
+            self.run_single(&lane, action, &cmd.args, budget_ms, &cmd.command_id).await
         };
         let env = match out {
             Ok((msg, data)) => ResultEnvelope::success(cmd, msg, data),
@@ -319,8 +382,11 @@ impl Adapter {
         env
     }
 
-    async fn run_single(&self, lane: &str, action: &str, args: &Value, budget_ms: u64) -> AResult {
+    async fn run_single(&self, lane: &str, action: &str, args: &Value, budget_ms: u64, cmd_id: &str) -> AResult {
         match action {
+            "file_list" => self.file_list(args),
+            "file_get" => self.file_get(cmd_id, args),
+            "file_put" => self.file_put(cmd_id, args, budget_ms).await,
             "snapshot" => self.snapshot(lane, args).await,
             "apps" => self.apps(args).await,
             "open" => self.open(args).await,
@@ -1067,7 +1133,7 @@ impl Adapter {
             } else if let (false, Some(h)) = (envelope::is_human_safe(&action), self.presence.human_active()) {
                 Err(ActionError::with("HUMAN_ACTIVE", format!("the person is using the computer ({} ms ago)", h.idle_ms), json!({ "retry_after_ms": h.retry_after_ms })))
             } else {
-                match tokio::time::timeout(Duration::from_millis(step_budget), self.run_single(lane, &action, &sargs, step_budget)).await {
+                match tokio::time::timeout(Duration::from_millis(step_budget), self.run_single(lane, &action, &sargs, step_budget, "")).await {
                     Ok(r) => r,
                     Err(_) => Err(ActionError::with("TIMEOUT", format!("step {n} ({action}) overran its budget of {step_budget} ms"), json!({ "budget_ms": step_budget, "started": true }))),
                 }
@@ -1134,9 +1200,235 @@ fn compact_step_data(action: &str, mut data: Value) -> Value {
     }
 }
 
+// ------------------------------------------------------------------ files (contract 1.1)
+//
+// Inside the roots only: the computer's owner sets them in the console (they
+// arrive in bind_ack), the machine's policy file adds its own; a path outside
+// every root is FILE_NOT_ALLOWED and names the roots. Paths are canonicalized
+// (junctions and `..` resolved) before the check. No execution, ever.
+
+fn expand_env(p: &str) -> String {
+    let mut out = String::new();
+    let mut rest = p;
+    while let Some(i) = rest.find('%') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        match after.find('%') {
+            Some(j) => {
+                let var = &after[..j];
+                match std::env::var(var) {
+                    Ok(v) => out.push_str(&v),
+                    Err(_) => {
+                        out.push('%');
+                        out.push_str(var);
+                        out.push('%');
+                    }
+                }
+                rest = &after[j + 1..];
+            }
+            None => {
+                out.push_str(&rest[i..]);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn canon_dir(p: &Path) -> Option<PathBuf> {
+    std::fs::canonicalize(p).ok()
+}
+
+fn human_size(n: u64) -> String {
+    if n >= 1_048_576 {
+        format!("{:.1} MB", n as f64 / 1_048_576.0)
+    } else if n >= 1024 {
+        format!("{:.0} KB", n as f64 / 1024.0)
+    } else {
+        format!("{n} B")
+    }
+}
+
+impl Adapter {
+    fn roots(&self, write: bool) -> Vec<String> {
+        let (r, w) = self.remote_roots.lock().unwrap().clone();
+        let mut out: Vec<String> = if write { w } else { r };
+        let local = if write { &self.policy.file_put_roots } else { &self.policy.file_roots };
+        for l in local {
+            if !out.iter().any(|x| x.eq_ignore_ascii_case(l)) {
+                out.push(l.clone());
+            }
+        }
+        out
+    }
+
+    /// The canonical path when it lies inside one of the roots; the roots are named in the refusal.
+    fn inside_roots(&self, requested: &str, write: bool) -> Result<PathBuf, ActionError> {
+        let roots = self.roots(write);
+        let refuse = |why: &str| {
+            ActionError::with(
+                "FILE_NOT_ALLOWED",
+                if roots.is_empty() {
+                    format!("{why}: this computer allows no file {} at all. The computer's owner adds folders under Browsers & Desktops → Computers → Edit.", if write { "writes" } else { "access" })
+                } else {
+                    format!("{why}: only paths inside {} are allowed ({}).", if write { "the folders agents may write into" } else { "the folders agents may read from" }, roots.join("; "))
+                },
+                json!({ "roots": roots, "write": write }),
+            )
+        };
+        let expanded = expand_env(requested.trim());
+        if expanded.is_empty() {
+            return Err(ActionError::new("EXECUTION_ERROR", "path is required"));
+        }
+        let p = PathBuf::from(&expanded);
+        // Reads: the thing itself must exist. Writes: its folder must; the file may not yet.
+        let canon = if write {
+            let parent = p.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+            let name = p.file_name().ok_or_else(|| ActionError::new("EXECUTION_ERROR", "path must name a file"))?.to_os_string();
+            canon_dir(&parent).ok_or_else(|| ActionError::with("FILE_NOT_FOUND", format!("The folder of \"{expanded}\" does not exist."), json!({ "path": expanded })))?.join(name)
+        } else {
+            canon_dir(&p).ok_or_else(|| ActionError::with("FILE_NOT_FOUND", format!("\"{expanded}\" does not exist on this computer."), json!({ "path": expanded })))?
+        };
+        for r in &roots {
+            if let Some(rc) = canon_dir(Path::new(&expand_env(r))) {
+                if canon.starts_with(&rc) {
+                    return Ok(canon);
+                }
+            }
+        }
+        Err(refuse(&format!("\"{expanded}\" is outside the allowed folders")))
+    }
+
+    fn file_list(&self, args: &Value) -> AResult {
+        let path = arg_str(args, "path").ok_or_else(|| ActionError::missing("path"))?;
+        let max = clamp_usize(arg_num(args, "max_entries").unwrap_or(200.0), 1, 1000);
+        let dir = self.inside_roots(&path, false)?;
+        let meta = std::fs::metadata(&dir).map_err(|e| ActionError::with("FILE_NOT_FOUND", format!("{}: {e}", dir.display()), json!({ "path": dir.display().to_string() })))?;
+        if !meta.is_dir() {
+            return Err(ActionError::new("EXECUTION_ERROR", format!("\"{}\" is a file, not a folder; file_get reads it.", dir.display())));
+        }
+        let mut entries: Vec<Value> = vec![];
+        let mut truncated = false;
+        let rd = std::fs::read_dir(&dir).map_err(|e| ActionError::new("EXECUTION_ERROR", format!("cannot list {}: {e}", dir.display())))?;
+        for ent in rd.flatten() {
+            if entries.len() >= max {
+                truncated = true;
+                break;
+            }
+            let m = match ent.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let modified = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs());
+            entries.push(json!({
+                "name": ent.file_name().to_string_lossy(),
+                "kind": if m.is_dir() { "dir" } else { "file" },
+                "size": if m.is_dir() { 0 } else { m.len() },
+                "modified": modified.map(|s| chrono::DateTime::from_timestamp(s as i64, 0).map(|d| d.to_rfc3339()).unwrap_or_default()),
+            }));
+        }
+        entries.sort_by(|a, b| a["kind"].as_str().cmp(&b["kind"].as_str()).then(a["name"].as_str().cmp(&b["name"].as_str())));
+        let msg = format!("{} entr{} in {}{}", entries.len(), if entries.len() == 1 { "y" } else { "ies" }, dir.display(), if truncated { " (more not listed)" } else { "" });
+        Ok((msg, json!({ "path": dir.display().to_string(), "entries": entries, "truncated": truncated })))
+    }
+
+    fn file_get(&self, cmd_id: &str, args: &Value) -> AResult {
+        let path = arg_str(args, "path").ok_or_else(|| ActionError::missing("path"))?;
+        let file = self.inside_roots(&path, false)?;
+        let meta = std::fs::metadata(&file).map_err(|e| ActionError::with("FILE_NOT_FOUND", format!("{}: {e}", file.display()), json!({ "path": file.display().to_string() })))?;
+        if !meta.is_file() {
+            return Err(ActionError::new("EXECUTION_ERROR", format!("\"{}\" is a folder; file_list lists it.", file.display())));
+        }
+        let cap = {
+            let s = self.settings.lock().unwrap();
+            let asked = arg_num(args, "max_bytes").map(|n| n as u64).filter(|n| *n > 0).unwrap_or(s.file_max_bytes);
+            asked.min(s.file_max_bytes)
+        };
+        if meta.len() > cap {
+            return Err(ActionError::with(
+                "FILE_TOO_LARGE",
+                format!("\"{}\" is {} and the cap is {}.", file.display(), human_size(meta.len()), human_size(cap)),
+                json!({ "size": meta.len(), "max_bytes": cap }),
+            ));
+        }
+        let bytes = std::fs::read(&file).map_err(|e| ActionError::new("EXECUTION_ERROR", format!("cannot read {}: {e}", file.display())))?;
+        let sha = format!("{:x}", sha2::Sha256::digest(&bytes));
+        let sink = self.frame_sink.lock().unwrap().clone().ok_or_else(|| ActionError::new("EXECUTION_ERROR", "no channel to stream the file on"))?;
+        let total = bytes.chunks(envelope::FILE_CHUNK_BYTES).count().max(1);
+        for (seq, part) in bytes.chunks(envelope::FILE_CHUNK_BYTES).enumerate() {
+            sink(json!({
+                "type": "file_chunk", "command_id": cmd_id, "seq": seq, "total": total,
+                "bytes_base64": base64::engine::general_purpose::STANDARD.encode(part)
+            }));
+        }
+        if bytes.is_empty() {
+            sink(json!({ "type": "file_chunk", "command_id": cmd_id, "seq": 0, "total": 1, "bytes_base64": "" }));
+        }
+        let name = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        Ok((
+            format!("{} ({}) sent in {} chunk{}", name, human_size(bytes.len() as u64), total, if total == 1 { "" } else { "s" }),
+            json!({ "path": file.display().to_string(), "name": name, "size": bytes.len(), "sha256": sha, "chunks": total }),
+        ))
+    }
+
+    async fn file_put(&self, cmd_id: &str, args: &Value, budget_ms: u64) -> AResult {
+        let path = arg_str(args, "path").ok_or_else(|| ActionError::missing("path"))?;
+        let target = self.inside_roots(&path, true)?;
+        let overwrite = arg_bool(args, "overwrite", false);
+        if target.exists() && !overwrite {
+            return Err(ActionError::with("FILE_EXISTS", format!("\"{}\" exists already; pass overwrite=true to replace it.", target.display()), json!({ "path": target.display().to_string() })));
+        }
+        // The bytes follow the command in file_chunk frames; wait for all of them.
+        let deadline = Instant::now() + Duration::from_millis(budget_ms.saturating_sub(2000).max(1000));
+        let bytes = loop {
+            if let Some(b) = self.take_chunks(cmd_id) {
+                break b;
+            }
+            if Instant::now() >= deadline {
+                let (got, total) = self.chunks_received(cmd_id);
+                return Err(ActionError::with("EXECUTION_ERROR", format!("the file's bytes did not all arrive in time ({got} of {total} chunks)"), json!({ "received": got, "total": total })));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+        let cap = self.settings.lock().unwrap().file_max_bytes;
+        if bytes.len() as u64 > cap {
+            return Err(ActionError::with("FILE_TOO_LARGE", format!("{} is above the cap of {}", human_size(bytes.len() as u64), human_size(cap)), json!({ "size": bytes.len(), "max_bytes": cap })));
+        }
+        let sha = format!("{:x}", sha2::Sha256::digest(&bytes));
+        if let Some(expected) = arg_str(args, "sha256") {
+            if !expected.eq_ignore_ascii_case(&sha) {
+                return Err(ActionError::new("EXECUTION_ERROR", "the file arrived damaged (sha256 mismatch); nothing was written"));
+            }
+        }
+        let overwrote = target.exists();
+        let tmp = target.with_extension(format!("{}.kareenos-part", target.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default()));
+        std::fs::write(&tmp, &bytes).map_err(|e| ActionError::new("EXECUTION_ERROR", format!("cannot write {}: {e}", tmp.display())))?;
+        if let Err(e) = std::fs::rename(&tmp, &target) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(ActionError::new("EXECUTION_ERROR", format!("cannot place {}: {e}", target.display())));
+        }
+        Ok((
+            format!("{} written ({})", target.display(), human_size(bytes.len() as u64)),
+            json!({ "path": target.display().to_string(), "size": bytes.len(), "sha256": sha, "overwrote": overwrote }),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_helpers() {
+        std::env::set_var("KAREENOS_TEST_ROOT", "/tmp/kroot");
+        assert_eq!(expand_env("%KAREENOS_TEST_ROOT%\\logs"), "/tmp/kroot\\logs");
+        assert_eq!(expand_env("%NOPE_NOT_SET%\\x"), "%NOPE_NOT_SET%\\x");
+        assert_eq!(expand_env("plain"), "plain");
+        assert_eq!(human_size(512), "512 B");
+        assert_eq!(human_size(2048), "2 KB");
+        assert_eq!(human_size(3 * 1_048_576), "3.0 MB");
+    }
 
     #[test]
     fn helpers() {

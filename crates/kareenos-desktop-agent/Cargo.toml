@@ -37,6 +37,8 @@ clap = { version = "4.5", features = ["derive"] }
 keyring = { version = "3", features = ["windows-native"] }
 hostname = "0.4"
 url = "2"
+# wave 2: file_get / file_put report a sha256
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
