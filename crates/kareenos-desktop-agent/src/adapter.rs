@@ -445,9 +445,6 @@ impl Adapter {
         self.all_windows().iter().filter(|w| w.process_id().unwrap_or(0) == pid).count()
     }
 
-    fn window_for_pid(&self, pid: u32) -> Option<UIElement> {
-        self.all_windows().into_iter().find(|w| w.process_id().unwrap_or(0) == pid)
-    }
 
     fn find_window_by_title(&self, title: &str) -> Result<UIElement, ActionError> {
         let needle = title.trim().to_lowercase();

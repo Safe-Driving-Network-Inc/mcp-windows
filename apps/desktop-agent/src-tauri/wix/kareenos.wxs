@@ -10,8 +10,9 @@
       session (UI Automation cannot run in session 0), restarts it, and writes
       Mode=service so the agent knows it is managed. Not installed by default.
   Referenced from tauri.conf.json (wix.fragmentPaths / componentRefs / featureRefs).
-  The service exe comes from the environment at build time (CI sets
-  KAREENOS_SERVICE_EXE to the built kareenos-desktop-service.exe).
+  The service exe's absolute path is substituted for @@KAREENOS_SERVICE_EXE@@
+  right before `tauri build` (CI does it; a local build runs the same one-liner
+  from KAREENOS.md) — candle gets no environment variables from Tauri.
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Fragment>
@@ -26,7 +27,7 @@
       </Component>
 
       <Component Id="KareenosService" Guid="0f6b1c7a-9d2e-4a3f-8c51-2b7e6d9f4a10" Win64="yes">
-        <File Id="KareenosServiceExe" Name="kareenos-desktop-service.exe" Source="$(env.KAREENOS_SERVICE_EXE)" KeyPath="yes" />
+        <File Id="KareenosServiceExe" Name="kareenos-desktop-service.exe" Source="@@KAREENOS_SERVICE_EXE@@" KeyPath="yes" />
         <RegistryValue Root="HKLM" Key="Software\Kareenos\DesktopAgent" Name="Mode" Value="service" Type="string" />
         <ServiceInstall Id="KareenosServiceInstall" Name="KareenosDesktopService" DisplayName="Kareenos Desktop Service"
                         Description="Keeps the Kareenos Desktop Agent running in the signed-in Windows session so Kareenos agents can work on this computer unattended."

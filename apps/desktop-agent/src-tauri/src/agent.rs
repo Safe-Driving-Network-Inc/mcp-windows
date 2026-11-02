@@ -280,7 +280,8 @@ impl Agent {
         self.update(|s| s.paused = on);
     }
 
-    /// No command in flight and none finished for `ms` (the updater's gate).
+    /// No command in flight and none finished for `ms` (the updater's gate; used behind the updater feature).
+    #[allow(dead_code)]
     pub fn idle_for(&self, ms: u64) -> bool {
         let s = self.status();
         s.busy.is_none() && s.last_command_at.map(|t| now_ms() - t >= ms as i64).unwrap_or(true)

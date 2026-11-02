@@ -86,7 +86,10 @@ jobs:
         shell: pwsh
         run: |
           cargo build -p kareenos-desktop-service --release
-          "KAREENOS_SERVICE_EXE=$PWD\target\release\kareenos-desktop-service.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $exe = "$PWD\target\release\kareenos-desktop-service.exe"
+          $wxs = "apps\desktop-agent\src-tauri\wix\kareenos.wxs"
+          (Get-Content $wxs -Raw).Replace("@@KAREENOS_SERVICE_EXE@@", $exe) | Set-Content $wxs -NoNewline
+          Select-String -Path $wxs -Pattern "kareenos-desktop-service.exe" | Select-Object -First 1
       - name: Build the app and the MSI
         shell: pwsh
         working-directory: apps/desktop-agent

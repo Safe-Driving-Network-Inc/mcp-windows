@@ -84,7 +84,7 @@ directly:
 - The pause switch is the flag file in `%LOCALAPPDATA%\Kareenos\DesktopAgent` (shared with the
   console binary); the client's watcher sends the `state` frame.
 
-Build on Windows: `npm i -g @tauri-apps/cli@^2` then `cd apps/desktop-agent && tauri build`
+Build on Windows: `npm i -g @tauri-apps/cli@^2`, build the service (`cargo build -p kareenos-desktop-service --release`), put its absolute path into the WiX fragment (`(Get-Content apps\desktop-agent\src-tauri\wix\kareenos.wxs -Raw).Replace('@@KAREENOS_SERVICE_EXE@@', "$PWD\target\release\kareenos-desktop-service.exe") | Set-Content apps\desktop-agent\src-tauri\wix\kareenos.wxs -NoNewline`; never commit the substituted file), then `cd apps/desktop-agent && tauri build`
 (the WiX toolset is downloaded by the CLI; output `target/release/bundle/msi/*.msi`). CI does
 exactly this in the `app` job of `.github/workflows/kareenos-desktop-agent.yml` and uploads
 `kareenos-desktop-agent-msi-win32-x64`. The job also proves the app opens no listening port.
