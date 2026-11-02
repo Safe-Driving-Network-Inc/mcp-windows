@@ -59,8 +59,10 @@ pub fn parse_key(b64: &str) -> Result<(String, VerifyingKey)> {
     Ok((kid_of(&arr), key))
 }
 
+/// Lower-case, no surrounding dots: a policy entry may be written `.example.com`
+/// ("any subdomain"), which means the same as `example.com` here.
 pub fn normalize_host(h: &str) -> String {
-    h.trim().trim_end_matches('.').to_lowercase()
+    h.trim().trim_matches('.').to_lowercase()
 }
 
 /// (scheme, host) of a URL, lower-cased.
