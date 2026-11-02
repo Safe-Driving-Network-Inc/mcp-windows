@@ -1,6 +1,6 @@
 [package]
 name = "kareenos-desktop-agent-app"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Kareenos Desktop Agent — the tray application around the kareenos-desktop-agent library (Kareenos Desktop Channel, §5.134)."
 license-file = { workspace = true }

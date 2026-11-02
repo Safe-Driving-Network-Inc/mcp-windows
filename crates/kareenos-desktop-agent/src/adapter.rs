@@ -11,7 +11,7 @@
 use crate::envelope::{self, CommandEnvelope, ResultEnvelope, MAX_RESULT_BYTES, RUN_STEPS_ALLOWED, RUN_STEPS_MAX};
 use crate::policy::LocalPolicy;
 use crate::presence::Presence;
-use crate::refbook::{RefBook, RefEntry, RefError};
+use crate::refbook::{pick_candidate, Bounds, LaneBook, RefBook, RefEntry, RefError, Root};
 use base64::Engine;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -387,7 +387,16 @@ impl Adapter {
         }
     }
 
-    async fn element_for_entry(&self, e: &RefEntry) -> Result<UIElement, ActionError> {
+    /// The live element behind a snapshot ref. Terminator's recorded role/name path
+    /// is the same for unnamed siblings (five `[Edit]` fields of one form all read
+    /// `… >> role:Edit`), so following the path lands on the first of them — the
+    /// 2026-11-02 dogfood bug where every value of a form went into its first box.
+    /// The path is therefore only the search key: every live element of the ref's
+    /// role and name inside the snapshot's window is listed, and the one at the
+    /// ref's recorded bounds is taken (`refbook::pick_candidate`: the window's move
+    /// and the ref's ordinal are the fallbacks). Live matches with none at the ref's
+    /// place answer STALE_REF — the window changed, snapshot again.
+    async fn element_for_entry(&self, lane: &str, e: &RefEntry) -> Result<UIElement, ActionError> {
         let Some(sel) = e.selector.as_deref() else {
             return Err(ActionError::with(
                 "STALE_REF",
@@ -395,6 +404,38 @@ impl Adapter {
                 json!({ "ref": e.index }),
             ));
         };
+        let book = self.refbook.lane(lane);
+        let (head, last) = match sel.rsplit_once(" >> ") {
+            Some((h, l)) => (Some(h), l),
+            None => (None, sel),
+        };
+        if let Some(root) = self.snapshot_root(book.as_ref(), e, head).await {
+            let mut found: Vec<UIElement> = match root.locator(last) {
+                Ok(loc) => loc.all(Some(Duration::from_millis(2500)), Some(30)).await.unwrap_or_default(),
+                Err(_) => vec![],
+            };
+            if !found.is_empty() {
+                let bounds: Vec<Option<Bounds>> = found.iter().map(|c| c.bounds().ok()).collect();
+                let shift = match (book.as_ref().and_then(|b| b.window_bounds), root.bounds().ok()) {
+                    (Some(then), Some(now)) => Some((now.0 - then.0, now.1 - then.1)),
+                    _ => None,
+                };
+                let ordinal = book.as_ref().and_then(|b| b.ordinal(e.index)).map(|(o, _)| o);
+                if let Some(i) = pick_candidate(e.bounds, shift, ordinal, &bounds) {
+                    return Ok(found.swap_remove(i));
+                }
+                let live: Vec<Value> = bounds.iter().take(8).map(|b| json!(b.map(|b| [b.0, b.1, b.2, b.3]))).collect();
+                return Err(ActionError::with(
+                    "STALE_REF",
+                    format!(
+                        "Ref e{} ({} \"{}\") is no longer where the snapshot saw it in \"{}\" ({} {} element(s) there now, none at its place) — the window changed; call desktop_snapshot again.",
+                        e.index, e.role, e.name, e.window_title, found.len(), e.role
+                    ),
+                    json!({ "ref": e.index, "selector": sel, "bounds": [e.bounds.0, e.bounds.1, e.bounds.2, e.bounds.3], "live_bounds": live }),
+                ));
+            }
+        }
+        // Nothing of the ref's kind inside its window (or the window is gone): the recorded path itself.
         let chain = if sel.starts_with("process:") || e.process.is_empty() {
             sel.to_string()
         } else {
@@ -411,6 +452,28 @@ impl Adapter {
                 json!({ "ref": e.index, "selector": chain }),
             )),
         }
+    }
+
+    /// The window a lane's snapshot was taken in: by native handle (among the listed
+    /// windows and the focused one), else the first segment of the ref's recorded
+    /// path — the window node, process-scoped, exactly where path resolution starts.
+    async fn snapshot_root(&self, book: Option<&LaneBook>, e: &RefEntry, head: Option<&str>) -> Option<UIElement> {
+        if let Some(h) = book.and_then(|b| b.hwnd) {
+            let mut windows = self.all_windows();
+            if let Ok(f) = self.focused_window() {
+                windows.push(f);
+            }
+            if let Some(w) = windows.into_iter().find(|w| w.get_native_window_handle().ok() == Some(h)) {
+                return Some(w);
+            }
+        }
+        let first = head?.split(" >> ").next()?;
+        let chain = if first.starts_with("process:") || e.process.is_empty() {
+            first.to_string()
+        } else {
+            format!("process:{} >> {}", e.process, first)
+        };
+        self.desktop.locator(chain.as_str()).first(Some(Duration::from_millis(2500))).await.ok()
     }
 
     async fn resolve_selector(&self, lane: &str, selector: &str, process: Option<String>) -> Result<Target, ActionError> {
@@ -447,7 +510,7 @@ impl Adapter {
                     .map(|e| {
                         let role = e.role();
                         let name = e.name().unwrap_or_default();
-                        let reference = self.refbook.find_by_role_name(lane, &role, &name).map(|i| format!("e{i}"));
+                        let reference = self.refbook.find_ref(lane, &role, &name, e.bounds().ok()).map(|i| format!("e{i}"));
                         let window = e.window().ok().flatten().and_then(|w| w.name()).unwrap_or_default();
                         json!({ "ref": reference, "role": role, "name": name, "window": window })
                     })
@@ -464,7 +527,7 @@ impl Adapter {
     async fn resolve_target(&self, lane: &str, args: &Value, required: bool) -> Result<Target, ActionError> {
         if let Some(r) = arg_str(args, "ref") {
             let entry = self.resolve_ref(lane, &r)?;
-            let el = self.element_for_entry(&entry).await?;
+            let el = self.element_for_entry(lane, &entry).await?;
             let mut t = Target::of(el, Some(format!("e{}", entry.index)));
             if t.pid == 0 {
                 t.pid = entry.pid;
@@ -537,10 +600,11 @@ impl Adapter {
         let values = arg_bool(args, "include_values", false);
         let max_chars = clamp_usize(arg_num(args, "max_chars").unwrap_or(12000.0), 2000, 60000);
         let cfg = tree_cfg(full, values, 30);
-        let (info, tree): (WindowInfo, UINode) = if scope.is_empty() || scope == "focused" {
+        let (info, tree, root_window): (WindowInfo, UINode, Option<UIElement>) = if scope.is_empty() || scope == "focused" {
             let w = self.focused_window()?;
             let t = self.desktop.get_tree_from_element(&w, Some(cfg))?;
-            (window_info(&w), t)
+            let info = window_info(&w);
+            (info, t, Some(w))
         } else if let Some(p) = scope.strip_prefix("process:") {
             let p = p.trim();
             let pid = terminator::find_pid_for_process(&self.desktop, p).map_err(|_| {
@@ -551,27 +615,45 @@ impl Adapter {
                 )
             })?;
             let t = self.desktop.get_window_tree(pid, None, Some(cfg))?;
-            let info = match self.window_for_pid(pid) {
-                Some(w) => window_info(&w),
-                None => WindowInfo { title: tree_title(&t), process: p.to_string(), pid, hwnd: None },
+            // The window the tree was built from: the process's window with the tree's title, else its first.
+            let title = tree_title(&t);
+            let mut wins: Vec<UIElement> = self.all_windows().into_iter().filter(|w| w.process_id().unwrap_or(0) == pid).collect();
+            let root_window = match wins.iter().position(|w| w.name().unwrap_or_default() == title) {
+                Some(i) => Some(wins.swap_remove(i)),
+                None => wins.into_iter().next(),
             };
-            (info, t)
+            let info = match &root_window {
+                Some(w) => window_info(w),
+                None => WindowInfo { title, process: p.to_string(), pid, hwnd: None },
+            };
+            (info, t, root_window)
         } else if let Some(title) = scope.strip_prefix("window:") {
             let w = self.find_window_by_title(title)?;
             let t = self.desktop.get_tree_from_element(&w, Some(cfg))?;
-            (window_info(&w), t)
+            let info = window_info(&w);
+            (info, t, Some(w))
         } else {
             let entry = self.resolve_ref(lane, &scope)?;
-            let el = self.element_for_entry(&entry).await?;
+            let el = self.element_for_entry(lane, &entry).await?;
             let t = self.desktop.get_tree_from_element(&el, Some(cfg))?;
-            let info = match el.window() {
-                Ok(Some(w)) => window_info(&w),
-                _ => WindowInfo { title: entry.window_title.clone(), process: entry.process.clone(), pid: entry.pid, hwnd: None },
+            let root_window = el.window().ok().flatten();
+            let info = match &root_window {
+                Some(w) => window_info(w),
+                None => WindowInfo { title: entry.window_title.clone(), process: entry.process.clone(), pid: entry.pid, hwnd: None },
             };
-            (info, t)
+            (info, t, root_window)
         };
         let fmt = format_ui_node_as_compact_yaml(&tree, 0);
-        let epoch = self.refbook.record(lane, info.pid, &info.process, &info.title, &fmt.index_to_bounds);
+        // The refs' home: the window's handle and bounds let a ref be found again by its
+        // place even when siblings share its role/name path (see element_for_entry).
+        let root = Root {
+            pid: info.pid,
+            process: info.process.clone(),
+            window_title: info.title.clone(),
+            hwnd: info.hwnd,
+            window_bounds: root_window.as_ref().and_then(|w| w.bounds().ok()),
+        };
+        let epoch = self.refbook.record(lane, &root, &fmt.index_to_bounds);
         let windows_total = self.window_count(info.pid);
         let header = format!(
             "## window \"{}\" process={} pid={} epoch={} ({} window{} of this process) refs={}\n",
@@ -666,7 +748,7 @@ impl Adapter {
     async fn focus(&self, lane: &str, args: &Value) -> AResult {
         let el: UIElement = if let Some(r) = arg_str(args, "ref") {
             let entry = self.resolve_ref(lane, &r)?;
-            self.element_for_entry(&entry).await?
+            self.element_for_entry(lane, &entry).await?
         } else if let Some(p) = arg_str(args, "process") {
             self.desktop.activate_application(&p).map_err(|e| match e {
                 AutomationError::ElementNotFound(m) => ActionError::with("APP_NOT_FOUND", format!("No running application \"{p}\": {m}"), json!({ "process": p })),
@@ -712,7 +794,7 @@ impl Adapter {
             (self.desktop.capture_monitor(&m).await?, "screen", None)
         } else if let Some(r) = arg_str(args, "ref") {
             let entry = self.resolve_ref(lane, &r)?;
-            let el = self.element_for_entry(&entry).await?;
+            let el = self.element_for_entry(lane, &entry).await?;
             let info = el.window().ok().flatten().map(|w| window_info(&w));
             (el.capture()?, "element", info)
         } else if let Some(w) = arg_str(args, "window") {
